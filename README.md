@@ -6,7 +6,9 @@ Tells you whether tonight's Dallas Mavericks game is worth watching from behind,
 
 - **Stay away**: from 6:00 left in the 2nd quarter onward, the latest reading gives the opponent more than a 90% chance to win.
 - **Watch**: the rule applies and the opponent is at 90% or below.
-- **Too early to call**, **Not started**, **No game today**, or **Can't tell** (ESPN unreachable).
+- **Too early to call**: the game is on but hasn't reached 6:00 left in the 2nd quarter.
+- **Next game**: no game is under way today, so the page shows the next game's day, time and opponent. A game that finished today still gets its verdict, for watching from behind.
+- **Can't tell**: ESPN couldn't be reached.
 
 The Mac computes the verdict and the page contains only that verdict: no score, clock, or percentage.
 

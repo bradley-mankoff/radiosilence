@@ -22,13 +22,35 @@ def fetch(url):
         return json.load(response)
 
 
-def todays_game_id(schedule, today):
-    """Return the ESPN event id of the Mavericks game on `today` (local date), or None."""
+def start_time(event):
+    return datetime.fromisoformat(event["date"].replace("Z", "+00:00")).astimezone()
+
+
+def state(event):
+    """ESPN's game state: 'pre', 'in' or 'post'."""
+    return event["competitions"][0]["status"]["type"]["state"]
+
+
+def todays_game(schedule, today):
+    """Return the schedule event for the Mavericks game on `today` (local date), or None."""
     for event in schedule["events"]:
-        start = datetime.fromisoformat(event["date"].replace("Z", "+00:00")).astimezone()
-        if start.date() == today:
-            return event["id"]
+        if start_time(event).date() == today:
+            return event
     return None
+
+
+def next_game(schedule, today):
+    """Return (headline, detail) previewing the next game that hasn't tipped off."""
+    for event in schedule["events"]:
+        if state(event) != "pre":
+            continue
+        start = start_time(event)
+        day = "Today" if start.date() == today else f"{start:%a, %b} {start.day}"
+        mavs, opponent = sorted(event["competitions"][0]["competitors"],
+                                key=lambda c: c["team"]["abbreviation"] != TEAM)
+        where = "vs" if mavs["homeAway"] == "home" else "at"
+        return "Next game", f"{day}, {start:%-I:%M %p} {where} {opponent['team']['displayName']}"
+    return "No upcoming games", "The Mavericks have no more games scheduled."
 
 
 def seconds_left(clock):
@@ -40,9 +62,6 @@ def seconds_left(clock):
 def verdict(summary):
     """Return (headline, detail) for one game's ESPN summary."""
     competition = summary["header"]["competitions"][0]
-    if competition["status"]["type"]["state"] == "pre":
-        return "Not started", "Tip-off hasn't happened yet."
-
     mavs_home = any(c["homeAway"] == "home" and c["team"]["abbreviation"] == TEAM
                     for c in competition["competitors"])
     plays = {play["id"]: play for play in summary.get("plays", [])}
@@ -67,10 +86,12 @@ def verdict(summary):
 
 def current_verdict():
     schedule = fetch(f"{ESPN}/teams/{TEAM.lower()}/schedule")
-    game_id = todays_game_id(schedule, datetime.now().astimezone().date())
-    if game_id is None:
-        return "No game today", "The Mavericks don't play today."
-    return verdict(fetch(f"{ESPN}/summary?event={game_id}"))
+    today = datetime.now().astimezone().date()
+    game = todays_game(schedule, today)
+    # A game that finished today still gets a verdict, since you may be about to watch it from behind.
+    if game is None or state(game) == "pre":
+        return next_game(schedule, today)
+    return verdict(fetch(f"{ESPN}/summary?event={game['id']}"))
 
 
 PAGE = """<!doctype html>
