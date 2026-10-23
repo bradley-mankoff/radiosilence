@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "bad_game_warning",
+  "project_id": "3a6a2c6f-8ead-465d-aa7b-7c2d0a06c18d"
+}
