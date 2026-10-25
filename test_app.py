@@ -66,6 +66,10 @@ class VerdictTest(unittest.TestCase):
         game = summary("in", "away", [(2, "5:00", 0.98), (3, "4:00", 0.99), (4, "3:00", 0.60)])
         self.assertEqual(verdict(game)[0], "Watch")
 
+    def test_a_late_correction_at_the_end_of_the_list_is_not_the_latest_reading(self):
+        game = summary("in", "away", [(4, "3:00", 0.60), (2, "5:00", 0.98)])
+        self.assertEqual(verdict(game)[0], "Watch")
+
     def test_seconds_left_under_a_minute(self):
         self.assertEqual(seconds_left("45.2"), 45.2)
         self.assertEqual(seconds_left("6:00"), 360)

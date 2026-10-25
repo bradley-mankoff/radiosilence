@@ -59,6 +59,11 @@ def seconds_left(clock):
     return int(minutes or 0) * 60 + float(seconds)
 
 
+def game_time(play):
+    """Sorts plays by when they happened in the game: later periods, then less time left."""
+    return play["period"]["number"], -seconds_left(play["clock"]["displayValue"])
+
+
 def verdict(summary):
     """Return (headline, detail) for one game's ESPN summary."""
     competition = summary["header"]["competitions"][0]
@@ -69,7 +74,9 @@ def verdict(summary):
     if not readings:
         return "No data yet", "ESPN hasn't published win probability for this game yet."
 
-    latest = readings[-1]
+    # ESPN appends late stat corrections to the end of the list, so the last Reading is not always
+    # the latest play; take the latest in game time, and the later one in the list on a tie.
+    latest = max(reversed(readings), key=lambda r: game_time(plays[r["playId"]]))
     play = plays[latest["playId"]]
     period = play["period"]["number"]
     left = seconds_left(play["clock"]["displayValue"])
