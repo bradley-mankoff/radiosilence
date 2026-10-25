@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TEAM = "DAL"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-STAY_AWAY_ODDS = 0.90  # opponent win probability above this means the game is out of reach
+STAY_AWAY_ODDS = 0.95  # opponent win probability above this means the game is out of reach
 PORT = int(os.environ.get("PORT", "8765"))
 
 
@@ -77,6 +77,7 @@ def verdict(summary):
     if period < 2 or (period == 2 and left > 6 * 60):
         return "Too early to call", "Check back after the middle of the 2nd quarter."
 
+    # Judged on the latest reading alone, so a game that comes back goes from Stay away to Watch again.
     home = latest["homeWinPercentage"]
     opponent = 1 - home if mavs_home else home
     if opponent > STAY_AWAY_ODDS:
@@ -100,6 +101,7 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Mavs?">
+<meta http-equiv="refresh" content="60">
 <title>Mavs?</title>
 <style>
   body {{ margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center;

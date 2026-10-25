@@ -47,19 +47,23 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(verdict(game)[0], "Too early to call")
 
     def test_blowout_at_the_cutoff_is_stay_away(self):
-        game = summary("in", "away", [(2, "6:00", 0.91)])
+        game = summary("in", "away", [(2, "6:00", 0.96)])
         self.assertEqual(verdict(game)[0], "Stay away")
 
     def test_mavs_at_home_use_the_away_side(self):
-        game = summary("in", "home", [(3, "8:00", 0.05)])
+        game = summary("in", "home", [(3, "8:00", 0.04)])
         self.assertEqual(verdict(game)[0], "Stay away")
 
-    def test_exactly_ninety_percent_is_still_watchable(self):
-        game = summary("in", "away", [(3, "8:00", 0.90)])
+    def test_exactly_ninety_five_percent_is_still_watchable(self):
+        game = summary("in", "away", [(3, "8:00", 0.95)])
         self.assertEqual(verdict(game)[0], "Watch")
 
-    def test_comeback_uses_the_latest_reading(self):
-        game = summary("in", "away", [(2, "5:00", 0.95), (4, "3:00", 0.60)])
+    def test_ninety_three_percent_is_watchable(self):
+        game = summary("in", "away", [(3, "8:00", 0.93)])
+        self.assertEqual(verdict(game)[0], "Watch")
+
+    def test_comeback_goes_back_from_stay_away_to_watch(self):
+        game = summary("in", "away", [(2, "5:00", 0.98), (3, "4:00", 0.99), (4, "3:00", 0.60)])
         self.assertEqual(verdict(game)[0], "Watch")
 
     def test_seconds_left_under_a_minute(self):
