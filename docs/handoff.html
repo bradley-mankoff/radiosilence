@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bad Game Warning: handoff, 2026-10-25</title>
+<style>
+  :root {
+    --blue: #0064b1; --navy: #002b5e; --ink: #0d1b2a; --paper: #f4f1ea; --card: #fffdf8;
+    --silver: #8d9093; --line: #d9d3c5; --red: #7a1f1f; --green: #2f6b3a; --amber: #a86b00;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font: 16px/1.55 "Iowan Old Style", "Palatino", Georgia, serif; }
+  h1, h2, h3, .sans, nav, button, .tag, .opt, .phone, table, .kpi { font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; }
+  header.hero { background: var(--navy); color: white; padding: 48px 6vw 36px; position: relative; overflow: hidden; }
+  header.hero::after { content: ""; position: absolute; right: -80px; top: -80px; width: 360px; height: 360px;
+       border-radius: 50%; border: 36px solid rgba(255,255,255,.06); }
+  .kicker { letter-spacing: .14em; text-transform: uppercase; font-size: .78rem; opacity: .7; }
+  h1 { font-size: clamp(2rem, 4.4vw, 3.3rem); margin: .2em 0 .3em; line-height: 1.05; letter-spacing: -.02em; }
+  .hero p { max-width: 60ch; opacity: .9; }
+  .spoiler { display: inline-block; margin-top: 14px; padding: 6px 12px; border-radius: 6px; background: rgba(255,255,255,.1); font-size: .9rem; }
+  .layout { display: grid; grid-template-columns: 230px 1fr; gap: 0; }
+  nav { position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto; padding: 24px 18px; border-right: 1px solid var(--line); font-size: .9rem; }
+  nav a { display: flex; justify-content: space-between; gap: 8px; color: var(--ink); text-decoration: none; padding: 5px 8px; border-radius: 6px; }
+  nav a:hover { background: #e9e3d6; }
+  nav .count { color: var(--silver); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  nav .progress { margin: 6px 8px 18px; height: 6px; background: #e3dccd; border-radius: 3px; overflow: hidden; }
+  nav .progress i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .3s; }
+  main { padding: 28px 5vw 120px; max-width: 1100px; }
+  section { margin: 0 0 64px; scroll-margin-top: 16px; }
+  h2 { font-size: 1.6rem; letter-spacing: -.01em; margin: 0 0 6px; border-bottom: 3px solid var(--ink); padding-bottom: 6px; }
+  h2 small { font-weight: 400; color: var(--silver); font-size: .95rem; margin-left: 8px; }
+  h3 { font-size: 1.1rem; margin: 26px 0 6px; }
+  .lede { font-size: 1.08rem; max-width: 70ch; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .kpi b { display: block; font-size: 1.9rem; letter-spacing: -.02em; }
+  .kpi span { color: #555; font-size: .9rem; }
+  .done li { margin: 4px 0; }
+  code, .mono { font-family: var(--mono); font-size: .86em; background: #ece6d8; padding: 1px 5px; border-radius: 4px; }
+  .tag { display: inline-block; font-size: .72rem; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; background: #e6e0d2; color: #444; vertical-align: middle; }
+  .tag.rec { background: var(--blue); color: white; }
+  .tag.urgent { background: var(--red); color: white; }
+  .tag.grill { background: #dfe9f5; color: var(--navy); }
+  .tag.task { background: #f4e6c8; color: #6b4a00; }
+  .tag.proto { background: #e6dcf2; color: #4b2a77; }
+  .tag.res { background: #dcefe0; color: var(--green); }
+  /* Questions */
+  .q { background: var(--card); border: 1px solid var(--line); border-left: 6px solid var(--blue); border-radius: 10px; padding: 18px 20px; margin: 18px 0; }
+  .q.answered { border-left-color: var(--green); }
+  .q.blocked { border-left-color: var(--silver); }
+  .q h3 { margin: 4px 0 8px; font-size: 1.15rem; }
+  .q .why { color: #333; max-width: 75ch; }
+  .q .meta { font-size: .82rem; color: #666; margin-top: 6px; font-family: -apple-system, sans-serif; }
+  .opts { display: grid; gap: 8px; margin: 12px 0 8px; }
+  .opt { display: grid; grid-template-columns: 22px 1fr; gap: 6px 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: white; font-size: .95rem; }
+  .opt:hover { border-color: var(--blue); }
+  .opt input { margin-top: 4px; }
+  .opt .d { grid-column: 2; color: #555; font-size: .87rem; }
+  .opt.chosen { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(0,100,177,.15); }
+  textarea { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: .92rem -apple-system, sans-serif; background: white; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--ink); color: white; padding: 12px 5vw; display: flex; gap: 14px; align-items: center; z-index: 5; font-family: -apple-system, sans-serif; }
+  .bar button { background: var(--blue); color: white; border: 0; padding: 9px 16px; border-radius: 7px; font-weight: 600; cursor: pointer; }
+  .bar button.ghost { background: transparent; border: 1px solid #556; }
+  .bar .msg { opacity: .8; font-size: .9rem; }
+  /* Charts */
+  .chart { background: white; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0; font-family: -apple-system, sans-serif; font-size: .9rem; align-items: center; }
+  .controls button { border: 1px solid var(--line); background: white; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+  .controls button.on { background: var(--ink); color: white; border-color: var(--ink); }
+  .readout { font-family: -apple-system, sans-serif; font-size: .92rem; margin-top: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; background: white; }
+  th, td { border-bottom: 1px solid var(--line); padding: 7px 10px; text-align: left; }
+  th { background: #efe9dc; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.current td { background: #e7f0fa; font-weight: 600; }
+  /* Phones */
+  .phones { display: flex; flex-wrap: wrap; gap: 22px; }
+  .phonewrap { width: 190px; }
+  .phonewrap p { font-size: .85rem; color: #444; margin: 8px 2px 0; }
+  .phone { width: 190px; height: 360px; border-radius: 30px; border: 8px solid #111; background: #333; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; position: relative; overflow: hidden; }
+  .phone::before { content: ""; position: absolute; top: 8px; width: 60px; height: 14px; background: #111; border-radius: 8px; }
+  .phone .h { font-size: 1.75rem; font-weight: 700; margin: 0 10px; line-height: 1.1; }
+  .phone .p { font-size: .78rem; opacity: .85; margin: 10px 14px 0; }
+  .phone .btn { margin-top: 18px; border: 1px solid rgba(255,255,255,.55); border-radius: 18px; padding: 6px 14px; font-size: .75rem; }
+  .phone .ad { position: absolute; bottom: 14px; left: 12px; right: 12px; border: 1px dashed rgba(255,255,255,.5); border-radius: 8px; font-size: .62rem; padding: 6px; opacity: .85; }
+  .phone .url { position: absolute; top: 28px; font-size: .6rem; opacity: .6; font-family: var(--mono); }
+  .phone .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; margin: 10px; }
+  .phone .chips span { font-size: .62rem; border: 1px solid rgba(255,255,255,.4); border-radius: 10px; padding: 2px 7px; }
+  .watch { background: var(--blue); } .stay { background: var(--red); } .must { background: #0b7a5a; } .gray { background: #333; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font: .85rem -apple-system, sans-serif; margin: 8px 0; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  svg text { font-family: -apple-system, sans-serif; }
+  .gloss dt { font-weight: 700; font-family: -apple-system, sans-serif; margin-top: 10px; }
+  .gloss dd { margin: 2px 0 0 0; color: #333; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); } .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="kicker">Bad Game Warning · handoff · Sunday 2026-10-25</div>
+  <h1>Five Maps, 31 questions,<br>and the six to answer first.</h1>
+  <p>You asked for the 95% line, a verdict that can come back to Watch, a projectified repo, and an epic for each of five directions, mapped with Wayfinder and handed back as one page of questions. The code changes are live. Everything else is a decision only you can make. Each question below has a recommended answer, already marked. Change what you disagree with, then press <b>Copy my answers</b> and paste the result into a session.</p>
+  <div class="spoiler">Spoiler note: this page shows the 2026-10-24 Spurs game and last season's results.</div>
+</header>
+<div class="layout">
+<nav id="nav">
+  <div class="sans" style="font-weight:700;margin:0 8px 4px">Answered <span id="navcount">0</span></div>
+  <div class="progress"><i id="navbar"></i></div>
+  <a href="#done">What changed tonight</a>
+  <a href="#first">Answer these first</a>
+  <a href="#maps">The five Maps</a>
+  <a href="#line">The line, played back</a>
+  <a href="#phones">What the phone could show</a>
+  <a href="#flow">How it could run</a>
+  <a href="#qA">A · Personal watchability <span class="count" data-c="A"></span></a>
+  <a href="#qB">B · All teams <span class="count" data-c="B"></span></a>
+  <a href="#qC">C · Highlights <span class="count" data-c="C"></span></a>
+  <a href="#qD">D · License, hosting, install <span class="count" data-c="D"></span></a>
+  <a href="#qE">E · Advertisers <span class="count" data-c="E"></span></a>
+  <a href="#qP">Projectify <span class="count" data-c="P"></span></a>
+  <a href="#words">Words to settle <span class="count" data-c="W"></span></a>
+  <a href="#evidence">Evidence files</a>
+</nav>
+<main>
+
+<section id="done">
+  <h2>What changed tonight <small>done and verified</small></h2>
+  <div class="grid" style="margin:14px 0">
+    <div class="card kpi"><b>95%</b><span>Stay away line, up from 90%. Exactly 95% is Watch. Live on the Mac, commit <code>4dd8347</code>.</span></div>
+    <div class="card kpi"><b>60 s</b><span>The page now refreshes itself, so an open phone moves from Stay away back to Watch without a tap.</span></div>
+    <div class="card kpi"><b>12 / 12</b><span>Tests pass (<code>python3 -m unittest</code>), including a comeback test (98%, then 99%, then 60% reads Watch) and a late-correction test.</span></div>
+    <div class="card kpi"><b>10 of 82</b><span>Last season's games where ESPN's last listed Reading was an earlier play. The page now takes the latest in game time (commit <code>cb4dc2e</code>).</span></div>
+    <div class="card kpi"><b>5 Maps</b><span>Wayfinder Maps in Beads with 35 map Beads: 10 settled by research, 1 waiting on Monday's game, 24 waiting on you.</span></div>
+  </div>
+  <ul class="done">
+    <li><b>Two ways the page could look stuck, both fixed.</b> <code>app.py</code> already judged only one Reading, but (1) the page never reloaded itself, and (2) it took ESPN's <i>last listed</i> Reading, which in 10 of last season's 82 games was a late stat correction from earlier in the game (in one 20-point loss, a 2nd-quarter timeout at 71%). Now the page refreshes every minute and judges the Reading latest in game time.</li>
+    <li><b>Projectified inside the repo:</b> <code>GLOSSARY.md</code> (domain words, first version), a project section in <code>AGENTS.md</code> and <code>CLAUDE.md</code>, research notes and a season backtest in <code>docs/research/</code>, and this page at <code>docs/handoff.html</code>. Making it a <i>Factory</i> project needs a GitHub repo, so that one waits on you (<a href="#qP">Projectify</a>).</li>
+    <li><b>Found while doing it:</b> after the final buzzer, the page shows Stay away for every loss and Watch for every win, so a finished game's Verdict gives away the result. Last season that would have marked 16 losses by 6 or fewer as Stay away. This is the most urgent question (<a href="#q-A4">A4</a>).</li>
+  </ul>
+</section>
+
+<section id="first">
+  <h2>Answer these first <small>they unblock the most</small></h2>
+  <p class="lede">Most Beads wait on a handful of answers. These are ranked by how much each unblocks and by how soon it matters (the next game is Monday at Miami, 6:30 PM).</p>
+  <div id="firstlist"></div>
+</section>
+
+<section id="maps">
+  <h2>The five Maps <small>Beads, and what blocks what</small></h2>
+  <p class="lede">Each column is one Map: an Epic labelled <code>wayfinder:map</code> whose child Beads each settle one question. The Highlights Map sits inside the All teams Map, as you asked. Arrows run from a Bead to the Bead it unblocks. Click any open Bead to jump to its question.</p>
+  <div class="legend">
+    <span><i style="background:#2f6b3a"></i>Settled by research</span>
+    <span><i style="background:#0064b1"></i>Waiting on you, ready now</span>
+    <span><i style="background:#fff;border:2px solid #8d9093"></i>Waiting on another Bead</span>
+    <span><i style="background:#6b4a00"></i>Task to approve</span>
+  </div>
+  <div class="chart" style="overflow-x:auto"><svg id="mapsvg"></svg></div>
+</section>
+
+<section id="line">
+  <h2>The line, played back <small>prototype for A3 and A4</small></h2>
+  <p class="lede">The opponent's win probability through a real game, with the Verdict the page would have shown underneath. Change the line and the return band to see how often the Verdict flips back and forth. The shaded part is before the Judging window opens (6:00 left in the 2nd).</p>
+  <div class="controls">
+    <span>Game:</span>
+    <button data-g="sa" class="on">Spurs, 2026-10-24 (lost by 16)</button>
+    <button data-g="2025-12-02DEN">Nuggets, 2025-12-02 (won by 10)</button>
+    <button data-g="2026-02-01HOU">Rockets, 2026-02-01 (lost by 4)</button>
+  </div>
+  <div class="controls">
+    <span>Line:</span><button data-l="0.90">90%</button><button data-l="0.93">93%</button><button data-l="0.95" class="on">95%</button><button data-l="0.97">97%</button><button data-l="0.99">99%</button>
+    <span style="margin-left:12px">Return band:</span><button data-b="0" class="on">None (today)</button><button data-b="0.03">3 points</button><button data-b="0.05">5 points</button>
+  </div>
+  <div class="chart"><svg id="wpsvg" viewBox="0 0 1000 330" width="100%"></svg>
+    <div class="readout" id="readout"></div></div>
+  <h3>Every line over last season (82 games)</h3>
+  <p>From <code>docs/research/backtest.py</code>. "Called wrongly" means Stay away showed before 2:00 was left in the 4th, but the Mavericks won or lost by 5 or fewer.</p>
+  <table id="bt"><thead><tr><th>Line</th><th>Stay away shown</th><th>Called wrongly</th><th>Minutes left at first Stay away (median)</th><th>Flips back to Watch</th><th>…with a 3-point band</th></tr></thead><tbody></tbody></table>
+  <h3>Finished games over last season</h3>
+  <table><thead><tr><th>Rule for a finished game</th><th>Stay away</th><th>Close losses (5 or fewer) called Stay away</th><th>Losses by 10+ shown Watch</th><th>Gives away the result?</th></tr></thead>
+  <tbody>
+    <tr class="current"><td>Latest Reading (today)</td><td class="num">all 56 losses</td><td class="num">10 of 10</td><td class="num">0 of 30</td><td>Yes: Stay away means they lost</td></tr>
+    <tr><td>Stayed over the line for the whole last 2:00 and any overtime</td><td class="num">29</td><td class="num">0</td><td class="num">3 of 30</td><td>Partly: Watch covers wins, close losses and a few late-decided losses</td></tr>
+    <tr><td>Whatever the live page said with 2:00 left</td><td class="num">29</td><td class="num">0</td><td class="num">4 of 30</td><td>Partly; also calls a late miracle win Stay away</td></tr>
+    <tr><td>Whatever the live page said with 5:00 left</td><td class="num">27</td><td class="num">1</td><td class="num">8 of 30</td><td>Partly</td></tr>
+  </tbody></table>
+</section>
+
+<section id="phones">
+  <h2>What the phone could show <small>mock-ups for A6, C6, B6, E4</small></h2>
+  <p class="lede">The first four are the page today. The rest are rough proposals to react to; none is built.</p>
+  <h3>Today</h3>
+  <div class="phones">
+    <div class="phonewrap"><div class="phone watch"><div class="h">Watch</div><div class="p">Still a game.</div></div><p>Opponent at 95% or below, in the Judging window.</p></div>
+    <div class="phonewrap"><div class="phone stay"><div class="h">Stay away</div><div class="p">This one looks out of reach.</div></div><p>Opponent over 95%.</p></div>
+    <div class="phonewrap"><div class="phone gray"><div class="h">Too early to call</div><div class="p">Check back after the middle of the 2nd quarter.</div></div><p>Before 6:00 left in the 2nd.</p></div>
+    <div class="phonewrap"><div class="phone gray"><div class="h">Next game</div><div class="p">Mon, Oct 26, 6:30 PM at Miami Heat</div></div><p>What it says right now.</p></div>
+  </div>
+  <h3>Proposals</h3>
+  <div class="phones">
+    <div class="phonewrap"><div class="phone must"><div class="h">Must watch</div><div class="p">Don't skip ahead.</div></div><p><b>A6, three levels.</b> A third Verdict for games with story events (overtime, a comeback). It gives a hint, so A5 decides whether it exists.</p></div>
+    <div class="phonewrap"><div class="phone stay"><div class="h">Stay away</div><div class="p">Out of reach late.</div><div class="btn">Highlights ▸</div></div><p><b>C6, finished game.</b> The Verdict from the finished-game rule (A4), with a neutral Highlights button that opens the NBA's reel on YouTube only on tap. No title, thumbnail or length.</p></div>
+    <div class="phonewrap"><div class="phone watch"><div class="h">Watch</div><div class="p">Still a game.</div><div class="btn">Highlights ▸</div></div><p><b>C2, the same button on every finished game</b>, so its presence never hints at the Verdict.</p></div>
+    <div class="phonewrap"><div class="phone gray"><div class="url">badgame.example/lal?line=97</div><div class="h">Lakers?</div><div class="p">Next game: Tue, Oct 27, 9:00 PM vs Phoenix</div><div class="chips"><span>Line 97%</span><span>Overtime counts</span></div></div><p><b>B6, one address per team</b>, criteria in the address. No account, and the home-screen icon is that team's.</p></div>
+    <div class="phonewrap"><div class="phone gray"><div class="h">Next game</div><div class="p">Mon, Oct 26, 6:30 PM at Miami Heat</div><div class="ad">Sponsor slot · shown before tip-off and after the final only · never odds</div></div><p><b>E4, where an ad may sit.</b> Only on the Next-game preview and finished games, never during play.</p></div>
+  </div>
+</section>
+
+<section id="flow">
+  <h2>How it could run <small>today, and with others using it</small></h2>
+  <div class="two">
+    <div class="chart"><svg viewBox="0 0 460 230" width="100%">
+      <text x="10" y="20" font-weight="700" font-size="14">Today</text>
+      <rect x="10" y="60" width="110" height="60" rx="10" fill="#0064b1"/><text x="65" y="88" fill="#fff" text-anchor="middle" font-size="13">Your iPhone</text><text x="65" y="105" fill="#fff" text-anchor="middle" font-size="10">home-screen page</text>
+      <rect x="175" y="60" width="110" height="60" rx="10" fill="#002b5e"/><text x="230" y="88" fill="#fff" text-anchor="middle" font-size="13">Your Mac</text><text x="230" y="105" fill="#fff" text-anchor="middle" font-size="10">app.py, port 8765</text>
+      <rect x="340" y="60" width="110" height="60" rx="10" fill="#8d9093"/><text x="395" y="88" fill="#fff" text-anchor="middle" font-size="13">ESPN</text><text x="395" y="105" fill="#fff" text-anchor="middle" font-size="10">public site API</text>
+      <path d="M120 90 H170" stroke="#333" stroke-width="2" marker-end="url(#ar)"/><path d="M285 90 H335" stroke="#333" stroke-width="2" marker-end="url(#ar)"/>
+      <text x="145" y="80" font-size="10" text-anchor="middle">plain HTTP</text><text x="310" y="80" font-size="10" text-anchor="middle">2 fetches</text><text x="310" y="135" font-size="10" text-anchor="middle">per page load</text>
+      <text x="10" y="170" font-size="11.5">Home Wi-Fi or Tailscale. The log shows the phone trying HTTPS</text>
+      <text x="10" y="186" font-size="11.5">and failing; Tailscale Serve would fix that privately (D3).</text>
+      <text x="10" y="210" font-size="11.5">ESPN's terms: personal, noncommercial use only.</text>
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#333"/></marker></defs>
+    </svg></div>
+    <div class="chart"><svg viewBox="0 0 460 230" width="100%">
+      <text x="10" y="20" font-weight="700" font-size="14">With other fans (D, B7)</text>
+      <rect x="10" y="40" width="90" height="34" rx="8" fill="#0064b1"/><text x="55" y="62" fill="#fff" text-anchor="middle" font-size="11">fan /dal</text>
+      <rect x="10" y="84" width="90" height="34" rx="8" fill="#0064b1"/><text x="55" y="106" fill="#fff" text-anchor="middle" font-size="11">fan /lal</text>
+      <rect x="10" y="128" width="90" height="34" rx="8" fill="#0064b1"/><text x="55" y="150" fill="#fff" text-anchor="middle" font-size="11">… 100k fans</text>
+      <rect x="150" y="70" width="120" height="70" rx="10" fill="#002b5e"/><text x="210" y="98" fill="#fff" text-anchor="middle" font-size="12">Host (Cloud Run)</text><text x="210" y="115" fill="#fff" text-anchor="middle" font-size="10">HTTPS, one cached</text><text x="210" y="128" fill="#fff" text-anchor="middle" font-size="10">Verdict per game</text>
+      <rect x="320" y="45" width="130" height="44" rx="10" fill="#2f6b3a"/><text x="385" y="64" fill="#fff" text-anchor="middle" font-size="11">Poller</text><text x="385" y="79" fill="#fff" text-anchor="middle" font-size="9.5">scoreboard + live games</text>
+      <rect x="320" y="120" width="130" height="44" rx="10" fill="#a86b00"/><text x="385" y="139" fill="#fff" text-anchor="middle" font-size="11">Readings source?</text><text x="385" y="154" fill="#fff" text-anchor="middle" font-size="9.5">ESPN / licensed / own model</text>
+      <path d="M100 57 L148 95 M100 101 H148 M100 145 L148 112" stroke="#333" stroke-width="1.5"/>
+      <path d="M270 95 L318 70" stroke="#333" stroke-width="1.5" marker-end="url(#ar)"/><path d="M385 89 V118" stroke="#333" stroke-width="1.5" marker-end="url(#ar)"/>
+      <text x="10" y="192" font-size="11.5">About 5,800 requests on a 15-game night, the same for 1 fan</text>
+      <text x="10" y="208" font-size="11.5">or 100,000. Cloud Run: about $0 at 1k fans, about $50 to $100</text>
+      <text x="10" y="224" font-size="11.5">a month at 100k (docs/research/hosting-license-install.md).</text>
+    </svg></div>
+  </div>
+  <h3>The money path, as you sketched it</h3>
+  <div class="chart"><svg viewBox="0 0 1000 150" width="100%">
+    <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#333"/></marker></defs>
+    <g font-size="12">
+      <rect x="10" y="30" width="200" height="70" rx="10" fill="#0064b1"/><text x="110" y="58" fill="#fff" text-anchor="middle" font-weight="700">1 · Free, no ads</text><text x="110" y="78" fill="#fff" text-anchor="middle" font-size="10.5">friends, then team subreddits</text>
+      <rect x="265" y="30" width="200" height="70" rx="10" fill="#002b5e"/><text x="365" y="58" fill="#fff" text-anchor="middle" font-weight="700">2 · Data rights</text><text x="365" y="78" fill="#fff" text-anchor="middle" font-size="10.5">needed before any revenue (B7)</text>
+      <rect x="520" y="30" width="200" height="70" rx="10" fill="#2f6b3a"/><text x="620" y="58" fill="#fff" text-anchor="middle" font-weight="700">3 · Non-gambling ads</text><text x="620" y="78" fill="#fff" text-anchor="middle" font-size="10.5">streaming affiliates, a sponsor</text>
+      <rect x="775" y="30" width="215" height="70" rx="10" fill="#7a1f1f"/><text x="882" y="58" fill="#fff" text-anchor="middle" font-weight="700">4 · Gambling ads?</text><text x="882" y="78" fill="#fff" text-anchor="middle" font-size="10.5">state licences, 21+, static only</text>
+      <path d="M210 65 H262 M465 65 H517 M720 65 H772" stroke="#333" stroke-width="2" marker-end="url(#ar2)"/>
+      <text x="10" y="128" font-size="11.5">At 1,000 fans, display ads earn single-digit dollars a month; a sportsbook pays roughly $100 to $250 per funded new bettor (unverified), but live odds would spoil the page.</text>
+    </g></svg></div>
+</section>
+
+<div id="questions"></div>
+
+<section id="words">
+  <h2>Words to settle <small>domain modeling</small></h2>
+  <p class="lede"><code>GLOSSARY.md</code> now holds the words the code already uses. Tonight's message and the new Maps bring in words that are not settled yet. Each one below has a proposed meaning; pick it or say otherwise. Two clashes first: you wrote "don't watch" and "call off" for what the page calls <b>Stay away</b>. The glossary lists both under <i>Avoid</i>, so later work keeps one name.</p>
+  <div id="wordq"></div>
+  <h3>Already in GLOSSARY.md</h3>
+  <dl class="gloss card">
+    <dt>Verdict</dt><dd>The one answer the page gives about a game: Watch, Stay away or Too early to call.</dd>
+    <dt>Stay away</dt><dd>The Verdict for a game that is out of reach for the Mavericks. <i>Avoid: don't watch, skip, bad game, call it off.</i></dd>
+    <dt>Reading</dt><dd>One win-probability value that ESPN publishes after a play.</dd>
+    <dt>Stay away line</dt><dd>The opponent's win probability above which a game counts as out of reach (95%).</dd>
+    <dt>Judging window</dt><dd>From 6:00 left in the 2nd quarter to the end.</dd>
+    <dt>Watching from behind, Spoiler, Game day, Next-game preview</dt><dd>See the file.</dd>
+  </dl>
+</section>
+
+<section id="evidence">
+  <h2>Evidence files</h2>
+  <table>
+    <tr><th>File</th><th>What it answers</th></tr>
+    <tr><td><code>docs/research/backtest-2025-26.md</code> + <code>backtest.py</code></td><td>How each line and finished-game rule would have done over 82 games.</td></tr>
+    <tr><td><code>docs/research/watchability-signals.md</code></td><td>Excitement measures, neighbouring products, every ESPN summary field and what spoils.</td></tr>
+    <tr><td><code>docs/research/data-sources-and-scaling.md</code></td><td>Which leagues have Readings, ESPN's terms, licensed feeds, polling every game.</td></tr>
+    <tr><td><code>docs/research/highlights.md</code></td><td>Highlight sources, embedding rules, spoiler-safe display.</td></tr>
+    <tr><td><code>docs/research/hosting-license-install.md</code></td><td>Licenses, hosting prices, web app install and push, cost at 1k to 100k fans.</td></tr>
+    <tr><td><code>docs/research/monetization.md</code></td><td>Betting affiliates, gambling-ad rules, other ads, growth channels.</td></tr>
+    <tr><td><code>docs/research/past-sessions-and-project-setup.md</code></td><td>Your earlier decisions, quoted, and what a Factory project needs.</td></tr>
+    <tr><td><code>docs/research/own-win-probability-model.md</code>, <code>finding-highlight-reels.md</code></td><td>B8 and C5. Both settled: own-win-probability-model.md (with own_model.py) and finding-highlight-reels.md.</td></tr>
+  </table>
+  <p>In Beads: <code>bd list --label wayfinder:map</code> lists the Maps; <code>bd ready --type=spike</code> lists the questions that can be settled now.</p>
+</section>
+</main>
+</div>
+<div class="bar"><button id="copy">Copy my answers</button><button class="ghost" id="reset">Reset to recommendations</button><span class="msg" id="msg">Recommended answers are pre-selected. Your changes are saved in this browser.</span></div>
+
+<script>
+const MAPDATA = {"maps": {"A": {"id": "bad_game_warning-06v", "title": "Personal watchability: judging a game from its live Readings and its story", "destination": ["Spec: Verdict rules, version 2. How the live Verdict is worked out from Readings: the Stay away line, any return band, the Judging window, and any story events that make a game worth watching.", "Spec: Finished-game Verdict. What a finished game shows until midnight without giving away the result.", "Spec: Story events. Which events (overtime, a comeback, a big night from a favourite player) count, and how they show without spoiling."], "not_yet": ["Where the fan is in the recording. The Verdict judges the live game, but the fan is behind it; a later question may be whether the page should ask where they are (for example 'I'm at halftime') and answer 'start from here' or 'skip to the 4th'.", "What 'game story' means beyond the play-by-play. ESPN's recap article only appears after the game and always names the result; whether it has any role is unclear until the finished-game Verdict is settled."]}, "B": {"id": "bad_game_warning-ux3", "title": "All teams, each with its own criteria", "destination": ["Spec: Any NBA team. A fan picks a team and gets its Verdict and Next-game preview.", "Spec: Criteria per team. Each team a fan follows can carry its own Stay away line and story events.", "Spec: Readings at scale. Where Readings come from, and on what terms, once people other than the Boss use the page."], "not_yet": ["A neutral fan's page. Whether the page should also say which of tonight's other games are worth watching, for a fan with no team in them.", "Other sports. Football and baseball have win probability on ESPN but no game clock on their plays, so the Judging window would need a new shape; this turns into questions once the leagues are chosen."]}, "C": {"id": "bad_game_warning-ux3.9", "title": "Highlights, and which ones to show", "destination": ["Spec: Highlight link. A spoiler-safe link to a game's highlights on the page.", "Spec: Highlight criteria. Which highlights a fan sees, per team or per fan."], "not_yet": ["Highlights for games that were worth watching. Whether a fan who watched the game in full also wants a highlights link afterwards."]}, "D": {"id": "bad_game_warning-3c1", "title": "License, scaling, hosting and installation", "destination": ["Spec: Private HTTPS for the Boss. The Boss's phone reaches the page securely at home and away.", "Spec: Public hosting. The page runs on a host with HTTPS and one shared fetch per game for every fan.", "Spec: Installable app. Add to Home Screen as a web app, with notifications if wanted.", "Spec: License and self-hosting. Under what license the code is published, and how someone runs their own copy."], "not_yet": ["A native App Store app. Apple's guideline 4.2 rejects apps that are a repackaged website, so this stays loose until the web app shows it is not enough."]}, "E": {"id": "bad_game_warning-4nr", "title": "Advertisers: free to start, paid by ads later", "destination": ["Spec: Free launch. Where the first fans come from and what the page offers them with no ads.", "Spec: First advertising. Which kind of ad, where it may appear without spoiling, and when it switches on."], "not_yet": ["Other ways to earn: a tip jar, a paid tier with more criteria, or a sponsor per team. These become questions once the money goal is set."]}}, "beads": {"A1": {"id": "bad_game_warning-06v.1", "title": "What signals published excitement measures and ESPN's data offer", "kind": "research", "closed": true}, "A2": {"id": "bad_game_warning-06v.2", "title": "How the Stay away line would have behaved last season", "kind": "research", "closed": true}, "A3": {"id": "bad_game_warning-06v.3", "title": "Which Stay away line, and whether a return band stops the flicker", "kind": "grilling", "closed": false}, "A4": {"id": "bad_game_warning-06v.4", "title": "What a finished game's Verdict should say", "kind": "grilling", "closed": false}, "A5": {"id": "bad_game_warning-06v.5", "title": "Which story events make a game worth watching, and how much hint is acceptable", "kind": "grilling", "closed": false}, "A6": {"id": "bad_game_warning-06v.6", "title": "How a richer Verdict looks on the phone", "kind": "prototype", "closed": false}, "A7": {"id": "bad_game_warning-06v.7", "title": "Record Monday's game at Miami minute by minute", "kind": "task", "closed": false}, "A8": {"id": "bad_game_warning-06v.8", "title": "In what order Readings arrive during a live game, and which fields exist live", "kind": "research", "closed": false}, "B1": {"id": "bad_game_warning-ux3.1", "title": "Which leagues' games carry win probability on ESPN", "kind": "research", "closed": true}, "B2": {"id": "bad_game_warning-ux3.2", "title": "How to poll every NBA game cheaply", "kind": "research", "closed": true}, "B3": {"id": "bad_game_warning-ux3.3", "title": "What ESPN's terms allow, and which licensed feeds carry win probability", "kind": "research", "closed": true}, "B4": {"id": "bad_game_warning-ux3.4", "title": "Whose criteria: the team's, the fan's, or the fan's for each team", "kind": "grilling", "closed": false}, "B5": {"id": "bad_game_warning-ux3.5", "title": "Which leagues and teams come first", "kind": "grilling", "closed": false}, "B6": {"id": "bad_game_warning-ux3.6", "title": "How a fan chooses teams without an account", "kind": "grilling", "closed": false}, "B7": {"id": "bad_game_warning-ux3.7", "title": "Where Readings come from once others use it", "kind": "grilling", "closed": false}, "B8": {"id": "bad_game_warning-ux3.8", "title": "Whether our own win-probability model can match ESPN's Readings", "kind": "research", "closed": true}, "C1": {"id": "bad_game_warning-ux3.9.1", "title": "Where highlights come from and which may be embedded", "kind": "research", "closed": true}, "C2": {"id": "bad_game_warning-ux3.9.2", "title": "When the page offers highlights", "kind": "grilling", "closed": false}, "C3": {"id": "bad_game_warning-ux3.9.3", "title": "Which highlights: the full-game reel, the team's plays, or a favourite player's", "kind": "grilling", "closed": false}, "C4": {"id": "bad_game_warning-ux3.9.4", "title": "How much a highlight link may give away", "kind": "grilling", "closed": false}, "C5": {"id": "bad_game_warning-ux3.9.5", "title": "How to find each game's NBA highlight reel reliably", "kind": "research", "closed": true}, "C6": {"id": "bad_game_warning-ux3.9.6", "title": "How a spoiler-safe highlight link looks", "kind": "prototype", "closed": false}, "D1": {"id": "bad_game_warning-3c1.1", "title": "Licenses, hosting costs and ways to install", "kind": "research", "closed": true}, "D2": {"id": "bad_game_warning-3c1.2", "title": "Who it is for in the first year", "kind": "grilling", "closed": false}, "D3": {"id": "bad_game_warning-3c1.3", "title": "How the Boss's phone reaches it securely now", "kind": "grilling", "closed": false}, "D4": {"id": "bad_game_warning-3c1.4", "title": "Whether to publish the code, and under which license", "kind": "grilling", "closed": false}, "D5": {"id": "bad_game_warning-3c1.5", "title": "Whether to send Watch or Stay away notifications", "kind": "grilling", "closed": false}, "D6": {"id": "bad_game_warning-3c1.6", "title": "What it is called and where it lives", "kind": "grilling", "closed": false}, "E1": {"id": "bad_game_warning-4nr.1", "title": "How betting affiliates pay, what gambling ads require, and what other ads earn", "kind": "research", "closed": true}, "E2": {"id": "bad_game_warning-4nr.2", "title": "What the money is for", "kind": "grilling", "closed": false}, "E3": {"id": "bad_game_warning-4nr.3", "title": "Whether gambling ads stay in the plan", "kind": "grilling", "closed": false}, "E4": {"id": "bad_game_warning-4nr.4", "title": "Where an ad may appear without spoiling", "kind": "grilling", "closed": false}, "E5": {"id": "bad_game_warning-4nr.5", "title": "When ads switch on", "kind": "grilling", "closed": false}, "E6": {"id": "bad_game_warning-4nr.6", "title": "Where the first free fans come from", "kind": "grilling", "closed": false}, "E7": {"id": "bad_game_warning-4nr.7", "title": "Ask affiliates what they pay a spoiler-free page", "kind": "task", "closed": false}, "P1": {"id": "bad_game_warning-gtv", "title": "Register Bad Game Warning as a Factory project", "kind": "task", "closed": false}}, "edges": [["A3", "A2"], ["A4", "A2"], ["A5", "A1"], ["A6", "A3"], ["A6", "A5"], ["A8", "A7"], ["B7", "B3"], ["B4", "A5"], ["C3", "B4"], ["C6", "C2"], ["C6", "C4"], ["D4", "D2"], ["D5", "D2"], ["D6", "D2"], ["E3", "B7"], ["E3", "E2"], ["E5", "E2"], ["E6", "D2"], ["E7", "E3"]]};
+const SERIES = {"sa":[[0,0.824],[17,0.846],[17,0.836],[17,0.824],[17,0.824],[37,0.836],[37,0.84],[60,0.863],[75,0.844],[75,0.841],[75,0.851],[83,0.837],[87,0.823],[102,0.81],[102,0.822],[109,0.81],[109,0.822],[114,0.81],[114,0.806],[125,0.817],[125,0.821],[138,0.809],[138,0.805],[156,0.816],[156,0.82],[160,0.804],[167,0.787],[178,0.772],[178,0.768],[190,0.781],[190,0.786],[197,0.771],[197,0.785],[202,0.802],[217,0.814],[217,0.818],[219,0.817],[219,0.817],[219,0.817],[235,0.832],[251,0.846],[254,0.859],[267,0.846],[267,0.82],[267,0.82],[267,0.845],[267,0.845],[280,0.859],[293,0.871],[296,0.882],[304,0.893],[304,0.893],[304,0.893],[304,0.893],[304,0.893],[304,0.893],[317,0.884],[317,0.882],[325,0.871],[343,0.86],[343,0.857],[357,0.867],[357,0.856],[359,0.843],[369,0.856],[383,0.842],[383,0.816],[383,0.816],[383,0.842],[383,0.842],[393,0.84],[393,0.84],[402,0.83],[402,0.826],[416,0.809],[429,0.825],[447,0.808],[459,0.824],[478,0.834],[478,0.838],[489,0.866],[506,0.853],[514,0.841],[514,0.838],[522,0.823],[531,0.823],[531,0.823],[531,0.823],[531,0.823],[531,0.823],[531,0.823],[542,0.808],[542,0.822],[546,0.837],[566,0.822],[579,0.843],[564,0.847],[564,0.837],[579,0.812],[579,0.82],[585,0.824],[585,0.835],[587,0.857],[587,0.861],[587,0.836],[587,0.836],[587,0.836],[587,0.836],[592,0.821],[604,0.806],[604,0.821],[610,0.85],[623,0.826],[628,0.86],[628,0.863],[640,0.853],[640,0.85],[657,0.82],[682,0.778],[692,0.798],[716,0.81],[716,0.814],[720,0.801],[720,0.817],[738,0.777],[750,0.758],[750,0.776],[754,0.814],[762,0.831],[771,0.853],[771,0.857],[771,0.844],[771,0.844],[771,0.844],[776,0.845],[784,0.829],[799,0.815],[799,0.829],[802,0.815],[802,0.811],[815,0.791],[834,0.775],[834,0.79],[842,0.774],[842,0.769],[845,0.79],[845,0.79],[845,0.79],[845,0.79],[856,0.809],[873,0.822],[873,0.826],[886,0.825],[886,0.825],[720,0.806],[720,0.806],[720,0.806],[899,0.841],[913,0.825],[936,0.805],[942,0.785],[964,0.762],[971,0.779],[971,0.784],[982,0.761],[986,0.736],[1008,0.711],[1008,0.711],[1008,0.711],[1024,0.683],[1026,0.653],[1042,0.658],[1042,0.651],[1053,0.624],[1072,0.648],[1083,0.67],[1083,0.647],[1086,0.619],[1087,0.619],[1099,0.645],[1117,0.615],[1130,0.589],[1130,0.581],[1139,0.58],[1139,0.58],[1139,0.58],[1152,0.602],[1152,0.61],[1159,0.639],[845,0.827],[166,0.835],[1176,0.66],[1176,0.668],[1184,0.722],[1186,0.721],[1186,0.722],[1186,0.722],[1194,0.746],[1197,0.771],[1221,0.718],[1234,0.697],[1234,0.717],[1240,0.744],[1240,0.785],[1240,0.768],[1255,0.79],[1264,0.772],[1264,0.789],[1266,0.811],[1283,0.825],[1283,0.83],[1292,0.815],[1292,0.81],[1298,0.825],[1298,0.83],[1309,0.814],[1309,0.829],[1312,0.848],[1318,0.862],[1318,0.848],[1333,0.829],[1355,0.848],[1362,0.819],[1362,0.832],[1362,0.847],[1362,0.849],[1362,0.849],[1362,0.849],[1362,0.849],[1362,0.849],[1378,0.864],[1392,0.83],[1400,0.847],[1407,0.861],[1407,0.865],[1430,0.852],[1430,0.847],[1435,0.867],[1437,0.883],[1437,0.905],[1437,0.896],[1437,0.896],[1437,0.896],[1439,0.905],[1439,0.895],[1440,0.902],[886,0.825],[928,0.809],[928,0.804],[936,0.774],[1440,0.902],[1440,0.902],[1440,0.902],[1440,0.902],[678,0.82],[1458,0.91],[1462,0.9],[1462,0.896],[1488,0.91],[1504,0.9],[1504,0.897],[1511,0.9],[1511,0.897],[1520,0.907],[1520,0.911],[1526,0.9],[1526,0.897],[1533,0.864],[1545,0.912],[1555,0.924],[1559,0.9],[1559,0.911],[1562,0.933],[1585,0.942],[1585,0.934],[1586,0.945],[1593,0.926],[1593,0.923],[1607,0.933],[1607,0.936],[1616,0.924],[1621,0.943],[1621,0.936],[1624,0.936],[1624,0.936],[1624,0.936],[1624,0.93],[1624,0.936],[1630,0.924],[1630,0.924],[1643,0.936],[1646,0.946],[1652,0.955],[1652,0.955],[1652,0.955],[1663,0.962],[1671,0.962],[1678,0.967],[1678,0.969],[1689,0.964],[1689,0.963],[1696,0.947],[1709,0.947],[1709,0.947],[1709,0.947],[1719,0.94],[1719,0.938],[1738,0.927],[1754,0.917],[1754,0.913],[1761,0.914],[1761,0.914],[1761,0.914],[1766,0.924],[1766,0.927],[1788,0.95],[1801,0.934],[1801,0.931],[1801,0.94],[1809,0.929],[1812,0.915],[1817,0.915],[1817,0.915],[1817,0.915],[1828,0.935],[1828,0.925],[1828,0.915],[1828,0.9],[1828,0.915],[1839,0.929],[1863,0.916],[1874,0.905],[1874,0.901],[1883,0.863],[1902,0.846],[1902,0.84],[1906,0.788],[1928,0.763],[1928,0.756],[1948,0.778],[1948,0.786],[1967,0.814],[1981,0.755],[2003,0.715],[2004,0.715],[1506,0.909],[2003,0.715],[2003,0.715],[2003,0.715],[2003,0.715],[2003,0.715],[2020,0.753],[2028,0.723],[2028,0.713],[2039,0.673],[2049,0.731],[2049,0.731],[2056,0.711],[2072,0.67],[2091,0.746],[2110,0.77],[2110,0.779],[2124,0.837],[2140,0.859],[2140,0.838],[2140,0.811],[2160,0.8],[936,0.805],[2160,0.8],[2160,0.8],[2160,0.8],[2160,0.8],[2173,0.785],[2173,0.774],[2188,0.738],[2205,0.81],[2224,0.836],[2224,0.845],[2240,0.872],[2254,0.896],[2269,0.879],[2269,0.897],[2275,0.879],[2275,0.897],[2280,0.879],[2280,0.897],[2288,0.935],[2300,0.931],[2306,0.946],[2306,0.95],[2309,0.953],[2320,0.94],[2320,0.937],[2328,0.949],[2328,0.953],[2335,0.973],[2339,0.973],[2339,0.973],[2339,0.973],[2353,0.954],[2365,0.939],[2365,0.939],[2369,0.939],[2378,0.904],[2378,0.954],[2378,0.949],[2378,0.954],[2378,0.954],[2378,0.954],[2394,0.942],[2394,0.938],[2415,0.956],[2429,0.946],[2429,0.942],[2450,0.956],[2450,0.944],[2463,0.957],[2463,0.961],[2479,0.965],[2479,0.965],[2479,0.965],[2489,0.981],[2515,0.987],[2515,0.988],[2527,0.995],[2530,0.995],[678,0.799],[2530,0.995],[2553,0.994],[2574,0.997],[2574,0.999],[2574,0.998],[2585,0.999],[2585,0.999],[2589,0.999],[2590,0.999],[2609,0.999],[2609,0.999],[2611,0.999],[2611,0.999],[2611,0.999],[2611,0.999],[2611,0.999],[2625,0.999],[2625,0.999],[2630,0.999],[2630,0.999],[2632,0.999],[2632,0.999],[2632,0.999],[2642,0.999],[2644,0.999],[2644,0.999],[2644,0.999],[2667,0.999],[2667,0.999],[2668,0.999],[2678,0.999],[2683,0.999],[2683,0.999],[2687,0.999],[2694,0.999],[2694,0.999],[2699,0.999],[2699,0.999],[2699,0.999],[2699,0.999],[2710,0.999],[2723,0.999],[2723,0.999],[2732,0.999],[2747,0.999],[2747,0.999],[2767,0.999],[2781,0.999],[2781,0.999],[2783,0.999],[2783,0.999],[2800,0.999],[2812,0.999],[2834,0.999],[2850,0.999],[2850,0.999],[2858,0.999],[2858,0.999],[2860,0.999],[2860,0.999],[2880,0.999],[2880,0.999],[2880,1.0],[2880,1.0]],"2026-02-01HOU":[[0,0.765],[16,0.753],[18,0.764],[18,0.764],[28,0.752],[29,0.747],[41,0.726],[54,0.71],[55,0.725],[61,0.71],[61,0.704],[76,0.719],[77,0.724],[88,0.762],[97,0.778],[98,0.783],[105,0.804],[105,0.793],[105,0.781],[105,0.78],[116,0.793],[117,0.797],[122,0.784],[123,0.779],[131,0.792],[132,0.797],[148,0.783],[149,0.779],[155,0.76],[178,0.745],[179,0.759],[192,0.745],[194,0.74],[200,0.74],[207,0.754],[208,0.759],[218,0.744],[219,0.739],[225,0.708],[225,0.702],[225,0.718],[236,0.701],[236,0.718],[236,0.718],[248,0.738],[266,0.717],[282,0.699],[283,0.693],[290,0.659],[290,0.677],[290,0.694],[290,0.694],[290,0.716],[290,0.716],[306,0.756],[318,0.77],[319,0.775],[326,0.793],[342,0.805],[343,0.809],[348,0.826],[348,0.826],[348,0.826],[364,0.841],[368,0.854],[389,0.864],[390,0.853],[398,0.841],[398,0.812],[398,0.812],[398,0.812],[398,0.826],[411,0.813],[411,0.808],[420,0.773],[433,0.789],[446,0.803],[448,0.789],[454,0.772],[468,0.756],[470,0.75],[477,0.766],[478,0.75],[478,0.729],[495,0.711],[496,0.728],[496,0.749],[512,0.765],[517,0.77],[523,0.787],[542,0.769],[554,0.753],[555,0.769],[561,0.752],[563,0.747],[563,0.747],[563,0.768],[563,0.768],[563,0.768],[563,0.768],[563,0.768],[563,0.768],[563,0.768],[573,0.725],[598,0.698],[603,0.717],[603,0.724],[603,0.724],[612,0.745],[628,0.76],[629,0.766],[646,0.804],[663,0.764],[680,0.782],[683,0.764],[683,0.724],[683,0.724],[683,0.742],[698,0.763],[710,0.784],[710,0.808],[710,0.772],[710,0.813],[710,0.813],[710,0.782],[710,0.797],[719,0.786],[720,0.804],[720,0.793],[720,0.793],[720,0.793],[720,0.793],[729,0.797],[730,0.78],[740,0.797],[740,0.802],[756,0.818],[776,0.801],[797,0.817],[814,0.831],[814,0.817],[815,0.8],[828,0.783],[828,0.777],[846,0.794],[846,0.777],[848,0.735],[871,0.757],[896,0.777],[896,0.777],[896,0.777],[896,0.777],[896,0.777],[905,0.761],[906,0.756],[913,0.772],[914,0.777],[919,0.761],[922,0.755],[938,0.771],[940,0.776],[953,0.759],[955,0.754],[961,0.73],[963,0.73],[963,0.73],[963,0.73],[963,0.73],[963,0.73],[980,0.708],[981,0.701],[993,0.675],[1004,0.726],[1019,0.745],[1020,0.752],[1028,0.772],[1042,0.789],[1043,0.795],[1055,0.777],[1056,0.771],[1065,0.75],[1088,0.729],[1089,0.722],[1096,0.742],[1098,0.749],[1109,0.728],[1110,0.749],[1110,0.766],[1110,0.788],[1110,0.788],[1110,0.788],[1110,0.77],[1122,0.787],[1125,0.793],[1135,0.813],[1136,0.813],[1136,0.813],[1151,0.828],[1153,0.833],[1162,0.818],[1162,0.813],[1168,0.779],[893,0.777],[1168,0.796],[1168,0.813],[1168,0.832],[1168,0.832],[1185,0.858],[1185,0.845],[1185,0.832],[1185,0.832],[1185,0.831],[1202,0.79],[1229,0.812],[1238,0.832],[1248,0.817],[1248,0.832],[1262,0.866],[1271,0.867],[1281,0.879],[1282,0.867],[1282,0.85],[1299,0.835],[1300,0.85],[1300,0.835],[1301,0.85],[1321,0.835],[1322,0.85],[1324,0.835],[1326,0.85],[1327,0.867],[1340,0.85],[1360,0.835],[1361,0.831],[1361,0.798],[1361,0.798],[1377,0.798],[1377,0.815],[1377,0.83],[1377,0.832],[1388,0.816],[1389,0.811],[1395,0.826],[1395,0.81],[1402,0.79],[1406,0.81],[1420,0.826],[1422,0.832],[1434,0.87],[1438,0.88],[1439,0.87],[1440,0.875],[1440,0.875],[1451,0.882],[1451,0.869],[1458,0.886],[1468,0.899],[1486,0.911],[1487,0.9],[1487,0.887],[1510,0.901],[1523,0.912],[1524,0.916],[1532,0.905],[1534,0.901],[1548,0.888],[1548,0.856],[1548,0.872],[1561,0.858],[1561,0.853],[1571,0.868],[1572,0.873],[1583,0.889],[1439,0.88],[1439,0.87],[1599,0.861],[1599,0.861],[1599,0.904],[1599,0.876],[1599,0.889],[1599,0.889],[1615,0.876],[1617,0.889],[1621,0.876],[1622,0.889],[1622,0.876],[1624,0.889],[1625,0.912],[1625,0.916],[1625,0.905],[1642,0.916],[1643,0.905],[1643,0.889],[1657,0.906],[1668,0.873],[1683,0.858],[1684,0.874],[1684,0.89],[1703,0.903],[1703,0.907],[1707,0.921],[1727,0.908],[1745,0.935],[1758,0.944],[1759,0.947],[1773,0.96],[1773,0.962],[1773,0.962],[1773,0.962],[1773,0.946],[1775,0.946],[1792,0.925],[1802,0.938],[1818,0.926],[1831,0.912],[1835,0.927],[1840,0.949],[1773,0.946],[1841,0.949],[1841,0.949],[1841,0.949],[1856,0.958],[1857,0.96],[1868,0.953],[1869,0.95],[1875,0.941],[1887,0.941],[1887,0.941],[1887,0.941],[1899,0.932],[1902,0.942],[1905,0.929],[1908,0.906],[1908,0.919],[1908,0.929],[1908,0.929],[1927,0.92],[1930,0.916],[1945,0.891],[1945,0.904],[1945,0.918],[1945,0.918],[1966,0.932],[1984,0.903],[2001,0.89],[2002,0.886],[2015,0.864],[2029,0.845],[2030,0.839],[2035,0.859],[2036,0.865],[2042,0.906],[2072,0.867],[2093,0.847],[2095,0.868],[2096,0.841],[2096,0.794],[2096,0.817],[2096,0.841],[2096,0.841],[2096,0.841],[2096,0.841],[2096,0.841],[2096,0.842],[2106,0.88],[2112,0.816],[2113,0.807],[2130,0.834],[2131,0.843],[2151,0.82],[2153,0.813],[2160,0.838],[2160,0.812],[2160,0.829],[2160,0.838],[2160,0.812],[2160,0.829],[2160,0.829],[2177,0.823],[2178,0.814],[2178,0.804],[2192,0.845],[2196,0.819],[2197,0.811],[2208,0.846],[2211,0.82],[2211,0.846],[2211,0.846],[2211,0.811],[2220,0.82],[2221,0.812],[2242,0.839],[2243,0.848],[2255,0.875],[2271,0.896],[2272,0.902],[2280,0.883],[2281,0.877],[2286,0.903],[2295,0.884],[2296,0.878],[2310,0.822],[2310,0.854],[2310,0.875],[2310,0.875],[2310,0.875],[2310,0.875],[2310,0.876],[2320,0.855],[2321,0.848],[2332,0.87],[2333,0.877],[2342,0.902],[2353,0.92],[2353,0.926],[2358,0.942],[2358,0.967],[2358,0.967],[2358,0.957],[2369,0.969],[2386,0.962],[2391,0.96],[2358,0.957],[2409,0.948],[2430,0.937],[2431,0.932],[2450,0.948],[2451,0.953],[2458,0.973],[2458,0.974],[2458,0.974],[2458,0.974],[2458,0.967],[2470,0.975],[2471,0.968],[2471,0.968],[2471,0.964],[2479,0.939],[2502,0.969],[2516,0.944],[2544,0.932],[2545,0.928],[2548,0.943],[2549,0.948],[2549,0.948],[2564,0.964],[2576,0.952],[2606,0.942],[2608,0.957],[2609,0.969],[2621,0.958],[2654,0.95],[2654,0.964],[2654,0.945],[2654,0.945],[2661,0.924],[2661,0.851],[2661,0.851],[2661,0.851],[2661,0.916],[2661,0.916],[2674,0.943],[2674,0.943],[2682,0.963],[2686,0.946],[2695,0.906],[2695,0.898],[2695,0.924],[2713,0.904],[2716,0.896],[2723,0.829],[2723,0.816],[2723,0.859],[2734,0.82],[2735,0.806],[2746,0.746],[2766,0.814],[2786,0.75],[2808,0.661],[2809,0.749],[2809,0.661],[2812,0.629],[2817,0.749],[2830,0.728],[2831,0.631],[2833,0.526],[2851,0.648],[2851,0.648],[2851,0.648],[2855,0.76],[2856,0.795],[2866,0.892],[2866,0.892],[2871,0.951],[2873,0.97],[2880,1.0],[2880,1.0]],"2025-12-02DEN":[[0,0.814],[17,0.821],[19,0.824],[25,0.814],[26,0.823],[32,0.851],[58,0.874],[72,0.863],[90,0.872],[109,0.88],[111,0.882],[117,0.893],[132,0.881],[148,0.903],[49,0.864],[161,0.908],[164,0.91],[171,0.904],[175,0.902],[183,0.907],[183,0.91],[186,0.925],[188,0.925],[26,0.814],[27,0.823],[207,0.931],[210,0.933],[214,0.927],[216,0.933],[216,0.927],[216,0.933],[216,0.933],[222,0.939],[222,0.939],[241,0.944],[242,0.945],[249,0.951],[275,0.955],[278,0.956],[286,0.961],[293,0.961],[293,0.961],[293,0.961],[300,0.962],[300,0.956],[307,0.95],[307,0.94],[307,0.951],[311,0.95],[325,0.955],[339,0.96],[343,0.955],[344,0.95],[359,0.944],[367,0.937],[367,0.924],[367,0.924],[367,0.931],[376,0.937],[376,0.948],[376,0.944],[387,0.937],[403,0.944],[417,0.948],[420,0.95],[426,0.945],[428,0.95],[432,0.945],[432,0.944],[452,0.929],[467,0.936],[478,0.921],[494,0.928],[506,0.934],[510,0.936],[513,0.945],[513,0.941],[513,0.936],[513,0.936],[513,0.936],[513,0.936],[513,0.936],[513,0.935],[534,0.94],[536,0.942],[539,0.935],[545,0.94],[549,0.935],[554,0.94],[557,0.942],[559,0.936],[559,0.935],[570,0.919],[571,0.919],[571,0.919],[571,0.919],[588,0.926],[615,0.932],[617,0.935],[635,0.948],[651,0.941],[667,0.935],[670,0.934],[679,0.939],[682,0.933],[683,0.939],[685,0.941],[691,0.948],[704,0.936],[707,0.941],[718,0.95],[718,0.946],[718,0.941],[718,0.941],[720,0.946],[720,0.939],[720,0.944],[720,0.944],[720,0.944],[720,0.944],[720,0.944],[737,0.955],[751,0.944],[751,0.95],[751,0.954],[751,0.954],[769,0.95],[773,0.954],[774,0.95],[775,0.954],[775,0.959],[783,0.954],[800,0.949],[803,0.948],[812,0.933],[830,0.941],[840,0.934],[840,0.944],[840,0.926],[840,0.926],[840,0.932],[840,0.94],[842,0.94],[852,0.947],[852,0.958],[852,0.954],[862,0.944],[862,0.942],[862,0.947],[876,0.942],[880,0.94],[883,0.923],[898,0.916],[901,0.913],[907,0.902],[907,0.902],[907,0.902],[907,0.902],[920,0.892],[922,0.889],[940,0.898],[943,0.901],[949,0.922],[965,0.913],[981,0.922],[991,0.929],[994,0.931],[1010,0.924],[1012,0.922],[1019,0.931],[1025,0.939],[1025,0.939],[1025,0.939],[1025,0.939],[1025,0.939],[1034,0.931],[1048,0.943],[1048,0.946],[1048,0.939],[1062,0.931],[1078,0.923],[1081,0.931],[1081,0.939],[1085,0.948],[1095,0.941],[1097,0.939],[1114,0.931],[1131,0.923],[1133,0.921],[1142,0.91],[1143,0.91],[1143,0.91],[1143,0.91],[1143,0.91],[1158,0.901],[1161,0.897],[1167,0.91],[1187,0.92],[1194,0.912],[1194,0.9],[1194,0.9],[1194,0.909],[1207,0.9],[1208,0.896],[1213,0.869],[1225,0.851],[1233,0.833],[1249,0.831],[1249,0.831],[1259,0.811],[1267,0.766],[1284,0.746],[1287,0.739],[1291,0.712],[1292,0.712],[1312,0.687],[1315,0.679],[1327,0.701],[1329,0.708],[1333,0.677],[1333,0.677],[1341,0.699],[1343,0.676],[1343,0.646],[1355,0.691],[1362,0.691],[1362,0.698],[1362,0.673],[1374,0.642],[1385,0.699],[1405,0.672],[1410,0.647],[1413,0.67],[1414,0.646],[1416,0.638],[1434,0.658],[1438,0.664],[1440,0.649],[1440,0.649],[1451,0.638],[1453,0.629],[1457,0.653],[1461,0.66],[1480,0.634],[1483,0.625],[1493,0.656],[1496,0.692],[1496,0.741],[1496,0.741],[1496,0.719],[1512,0.748],[1514,0.718],[1531,0.739],[1534,0.716],[1543,0.738],[1546,0.745],[1552,0.771],[1578,0.713],[1596,0.741],[1622,0.677],[1637,0.738],[1660,0.705],[1676,0.735],[1690,0.702],[1702,0.733],[1717,0.7],[1728,0.732],[1731,0.731],[1731,0.731],[1731,0.731],[1747,0.754],[1750,0.761],[1755,0.738],[1758,0.73],[1764,0.696],[1782,0.728],[1808,0.657],[1831,0.623],[1833,0.655],[1833,0.622],[1835,0.611],[1839,0.574],[1848,0.634],[1848,0.605],[1848,0.574],[1848,0.643],[1848,0.643],[1848,0.61],[1859,0.572],[1875,0.648],[1891,0.568],[1899,0.562],[1899,0.562],[1899,0.562],[1914,0.528],[1918,0.563],[1921,0.642],[1941,0.67],[1941,0.68],[1941,0.736],[1948,0.714],[1973,0.639],[1985,0.602],[1987,0.589],[1991,0.625],[1996,0.637],[2003,0.599],[2005,0.587],[2007,0.544],[2007,0.544],[2007,0.544],[2007,0.544],[2007,0.544],[2020,0.613],[2020,0.624],[2020,0.585],[2044,0.538],[2044,0.457],[2044,0.54],[2048,0.539],[2057,0.501],[2059,0.489],[2067,0.524],[2070,0.535],[2077,0.583],[2087,0.612],[2090,0.622],[2103,0.667],[2113,0.698],[2115,0.709],[2122,0.767],[2122,0.776],[2122,0.776],[2122,0.746],[2128,0.708],[2144,0.675],[2148,0.664],[2159,0.698],[2159,0.663],[2160,0.687],[2160,0.687],[2160,0.687],[2160,0.687],[2176,0.695],[2178,0.705],[2189,0.719],[2198,0.789],[2215,0.755],[2235,0.719],[2237,0.707],[2241,0.663],[2253,0.75],[2270,0.709],[2290,0.672],[2292,0.659],[2301,0.696],[2303,0.709],[2309,0.75],[2329,0.657],[2346,0.615],[2348,0.601],[2355,0.642],[2358,0.655],[2369,0.557],[2369,0.543],[2369,0.543],[2369,0.543],[2380,0.556],[2380,0.599],[2380,0.541],[2395,0.425],[2397,0.425],[2397,0.425],[2397,0.425],[2397,0.425],[2411,0.373],[2413,0.356],[2424,0.415],[2436,0.427],[2444,0.475],[2461,0.345],[2472,0.467],[2490,0.512],[2492,0.528],[2508,0.475],[2510,0.457],[2510,0.457],[2510,0.457],[2510,0.457],[2510,0.457],[2520,0.388],[2535,0.333],[2537,0.316],[2546,0.303],[2554,0.357],[2556,0.373],[2565,0.319],[2566,0.301],[2583,0.346],[2585,0.363],[2585,0.389],[2595,0.318],[2599,0.368],[2602,0.315],[2606,0.297],[2626,0.342],[2628,0.289],[2630,0.341],[2631,0.358],[2639,0.302],[2641,0.284],[2659,0.327],[2663,0.343],[2671,0.285],[2672,0.266],[2672,0.266],[2672,0.266],[2672,0.266],[2688,0.194],[2704,0.311],[2707,0.157],[2712,0.14],[2717,0.096],[2733,0.065],[2737,0.087],[2740,0.062],[2743,0.053],[2762,0.028],[2763,0.028],[2769,0.017],[2773,0.012],[2791,0.002],[2797,0.004],[2807,0.008],[2808,0.015],[2808,0.015],[2808,0.015],[2817,0.024],[2819,0.012],[2819,0.006],[2823,0.003],[2827,0.001],[2834,0.001],[2849,0.002],[2852,0.002],[2857,0.001],[2880,0.0],[2880,0.0]]};
+const BACKTEST = [
+  {line: .90, fired: 48, wrong: 7, median: 25.6, flips: 249, band: 95},
+  {line: .93, fired: 47, wrong: 7, median: 24.6, flips: 217, band: 79},
+  {line: .95, fired: 42, wrong: 3, median: 18.9, flips: 156, band: 55},
+  {line: .97, fired: 37, wrong: 2, median: 17.0, flips: 108, band: 25},
+  {line: .99, fired: 30, wrong: 0, median: 12.8, flips: 87, band: 8},
+];
+
+// Every question, keyed by its map Bead. rec marks the recommended option.
+const Q = {
+ P1: {map: "P", title: "Make it a Factory project now?", kind: "task", urgent: false,
+   why: "Inside the repo it is projectified. A Factory project also gets a Project Manager pane and FactoryClaw routing, and the Factory's build Workflows open pull requests, so the repo needs a GitHub remote first. Creating a GitHub repository is outward-facing, so I did not do it.",
+   opts: [
+     {t: "Yes: create a private GitHub repo, push, and run the Factory's install.sh for it", d: "install.sh ~/Developer/personal_code/bad_game_warning 'python3 -m unittest'", rec: true},
+     {t: "Not yet: keep it a local repo with Beads", d: "Everything in this page still works; a Project Manager can be added later."},
+     {t: "No: it stays a personal pi project", d: ""}]},
+ A3: {map: "A", title: "Which Stay away line, and whether a return band stops the flicker",
+   why: "At 95%, last season's Verdict flipped from Stay away back to Watch 156 times; in the Spurs game it flipped 7 times, most of them early in the 4th. A return band means a Stay away game goes back to Watch only once the opponent drops below a lower line. It is still not sticky: a real comeback still returns to Watch. Try it in <a href='#line'>the chart</a>.",
+   opts: [
+     {t: "95% in, back to Watch at 92% (3-point band)", d: "Flips last season: 156 → 55. Same calls as today.", rec: true},
+     {t: "95%, no band (today)", d: "Simplest; flickers late in close-ish games."},
+     {t: "97% in, back at 94%", d: "2 wrong calls instead of 3, 25 flips with the band, saves about 2 fewer minutes per blowout."},
+     {t: "95%, but only after two straight minutes over it", d: "A time rule instead of a band; slower to call."}]},
+ A4: {map: "A", title: "What a finished game's Verdict should say", urgent: true,
+   why: "At the final buzzer the loser's win probability is 0%, so today every loss reads Stay away and every win reads Watch: the Verdict is the result. You raised the midnight rule on 2026-10-23 so a finished game could still be checked; this is the gap it left. It matters from Monday night.",
+   opts: [
+     {t: "Stay away only if the opponent stayed over the line for the whole last 2:00 and any overtime", d: "Last season: 29 Stay away, no close losses among them, no wins. A late miracle comeback reads Watch.", rec: true},
+     {t: "Whatever the live page said with 2:00 left", d: "Same 29, but a miracle win after 2:00 would read Stay away."},
+     {t: "Keep the latest Reading (today)", d: "Gives away every result."},
+     {t: "After the final, show no Verdict, only 'Final: decide from the start'", d: "No hint at all, but no help either."}]},
+ A5: {map: "A", title: "Which story events make a game worth watching, and how much hint is acceptable",
+   why: "ESPN's play-by-play lets the server detect overtime, a comeback, a dunk-heavy game, a player's big night, a rookie's debut, rivalry and playoff stakes. Any of them shown on the page hints at how the game went: 'overtime' says it was close. They could also be used silently, only to move a borderline game to Watch.",
+   opts: [
+     {t: "Use none yet: the Verdict stays about 'out of reach' only", d: "Keep it simple until the finished-game rule and the line have a season behind them.", rec: true},
+     {t: "Use overtime and comebacks silently, never named on the page", d: "A borderline game becomes Watch; the reason stays hidden."},
+     {t: "Name them on the page ('Must watch: a comeback')", d: "Richest, and the biggest hint."}]},
+ A6: {map: "A", title: "How a richer Verdict looks on the phone", kind: "proto",
+   why: "See <a href='#phones'>the mock-ups</a>. A third level only makes sense if A5 adds story events.",
+   opts: [
+     {t: "Keep two words: Watch and Stay away", d: "", rec: true},
+     {t: "Three levels: Must watch, Watch, Stay away", d: "Needs A5's story events."},
+     {t: "A 0 to 100 watchability number", d: "Most informative, most spoiling."}]},
+ A7: {map: "A", title: "Record Monday's game at Miami minute by minute", kind: "task",
+   why: "A small script on the Mac would save ESPN's summary once a minute during Monday's game (6:30 to about 9:30 PM Central), into a folder outside the repo. It answers A8: whether ESPN's last Reading is always the latest play, and which fields (highlights, recap) exist while a game is live. It shows nothing on your screen and sends nothing anywhere.",
+   opts: [
+     {t: "Yes, record Monday's game", d: "", rec: true},
+     {t: "No", d: ""}]},
+ B4: {map: "B", title: "Whose criteria: the team's, the fan's, or the fan's for each team",
+   why: "'Different criteria for different teams' can mean three things. A Lakers fan who also follows the Mavericks might want a stricter line for one than the other.",
+   opts: [
+     {t: "The fan's, for each team they follow, starting from a default", d: "Proposed word: a Follow (a fan's choice of a team, with its criteria).", rec: true},
+     {t: "The team's: every fan of a team gets the same rule", d: "Simplest to host; no personal criteria."},
+     {t: "The fan's: one rule for all their teams", d: ""}]},
+ B5: {map: "B", title: "Which leagues and teams come first",
+   why: "ESPN has Readings for the NBA, WNBA, NFL, college football, MLB and men's college basketball; not the NHL or soccer. Basketball has the same data shape as today; football and baseball need a new Judging window.",
+   opts: [
+     {t: "All 30 NBA teams", d: "Same code path, one scoreboard poll.", rec: true},
+     {t: "NBA and WNBA", d: "Same shape; WNBA season is in the NBA's off-season."},
+     {t: "Several sports", d: "Needs per-sport rules."}]},
+ B6: {map: "B", title: "How a fan chooses teams without an account",
+   why: "See the <a href='#phones'>/lal mock-up</a>. Accounts mean passwords, storage and privacy rules.",
+   opts: [
+     {t: "One address per team, criteria in the address (/dal?line=97)", d: "Nothing stored; bookmarking is the setting; the icon is the team's.", rec: true},
+     {t: "Settings kept on the phone", d: "One address, but settings vanish with the browser's storage."},
+     {t: "Accounts", d: "Needed only for push notifications across devices."}]},
+ B7: {map: "B", title: "Where Readings come from once others use it", urgent: true,
+   why: "This blocks every money question. ESPN's terms (Disney Terms of Use) allow personal, noncommercial use and forbid automated extraction. No licensed feed with win probability has public prices; balldontlie sells play-by-play and betting odds for $9.99 to $39.99 a month per sport, but no win probability. New tonight (B8): a small model of lead, time left and the pre-game spread, fitted on half of last season, lands within 2.35 points of ESPN's Readings; over the season it calls Stay away in 40 games to ESPN's 42, never calls one ESPN did not, and its 2 misses are close losses. So a licensed play-by-play feed plus our own model can replace ESPN.",
+   opts: [
+     {t: "Our own model on a licensed play-by-play feed for anything public; ESPN until then, for you and friends only", d: "Affordable and licensed. Whether balldontlie's play-by-play arrives fast enough during a game is still unverified.", rec: true},
+     {t: "Stay on ESPN; every fan runs their own copy", d: "Personal use stays personal; no hosted service, no ads."},
+     {t: "Ask the enterprise feeds (Sportradar, Genius Sports) for a quote", d: "Likely thousands a year."},
+     {t: "Host on ESPN anyway and accept the risk", d: "Against the terms as written."}]},
+ C2: {map: "C", title: "When the page offers highlights",
+   why: "If only Stay away games got a Highlights button, the button itself would be a hint. ESPN removes its clips within months, so the NBA's YouTube reel is the lasting source.",
+   opts: [
+     {t: "On every finished game, whatever the Verdict", d: "Its presence never hints.", rec: true},
+     {t: "Only on Stay away games", d: "'Skip it, here are the highlights.'"},
+     {t: "Only when the fan asks", d: ""}]},
+ C3: {map: "C", title: "Which highlights: the full-game reel, the team's plays, or a favourite player's",
+   why: "The NBA posts one 'FULL GAME HIGHLIGHTS' reel per game. Team-only or player-only highlights need ESPN's short-lived single-play clips or YouTube searches, and become part of each Follow's criteria (B4).",
+   opts: [
+     {t: "The NBA's full-game reel", d: "One stable link per game.", rec: true},
+     {t: "The followed team's plays only", d: "From ESPN clips, which disappear."},
+     {t: "A favourite player's plays", d: "Per-player criteria."}]},
+ C4: {map: "C", title: "How much a highlight link may give away",
+   why: "A YouTube embed always shows its title ('SPURS at MAVERICKS | FULL GAME HIGHLIGHTS'), and a reel's length hints at overtime.",
+   opts: [
+     {t: "A neutral button only; it opens YouTube on tap", d: "No title, thumbnail, length or count on the page.", rec: true},
+     {t: "Play inside the page after a tap", d: "The title shows once it plays."},
+     {t: "Show the reel's length", d: "Hints at overtime."}]},
+ D2: {map: "D", title: "Who it is for in the first year",
+   why: "This sets whether hosting, licensing and data rights matter yet. It blocks the license, notifications, name and growth questions.", urgent: true,
+   opts: [
+     {t: "You and a few friends this season; the public next season", d: "Time to settle data rights (B7) before strangers arrive.", rec: true},
+     {t: "You alone", d: ""},
+     {t: "The public this season", d: "Needs B7 settled first."}]},
+ D3: {map: "D", title: "How your phone reaches it securely now",
+   why: "The server log shows your phone trying HTTPS (TLS bytes) against the plain-HTTP server. Tailscale Serve gives an HTTPS address only devices on your tailnet can open; Funnel makes it public.",
+   opts: [
+     {t: "Tailscale Serve: private HTTPS on your tailnet", d: "`tailscale serve --bg 8765`; app.py unchanged.", rec: true},
+     {t: "Tailscale Funnel: public HTTPS address", d: "Anyone with the link can open it."},
+     {t: "Leave it on plain HTTP", d: ""}]},
+ D4: {map: "D", title: "Whether to publish the code, and under which license",
+   why: "MIT and Apache-2.0 let anyone run a hosted copy with ads; AGPL-3.0 makes them publish their changes; source-available forbids competing copies. While you are the only author you can change your mind.",
+   opts: [
+     {t: "Keep it private until the public launch, then AGPL-3.0", d: "The business is the hosted page; AGPL keeps copies open.", rec: true},
+     {t: "Apache-2.0 now", d: "Most open, easiest for contributors."},
+     {t: "Closed", d: ""}]},
+ D5: {map: "D", title: "Whether to send Watch or Stay away notifications",
+   why: "iOS 16.4+ allows web push for home-screen web apps. The text can be spoiler-free, but a notification at 8:12 PM says the game turned at 8:12 PM.",
+   opts: [
+     {t: "No notifications for now", d: "", rec: true},
+     {t: "One opt-in notification per game, sent only after the final", d: "Carries the finished-game Verdict; timing gives nothing away."},
+     {t: "A notification whenever the Verdict changes", d: "Most useful live, most hinting."}]},
+ D6: {map: "D", title: "What it is called and where it lives",
+   why: "Today the repo is Bad Game Warning and the icon is 'Mavs?'.",
+   opts: [
+     {t: "Bad Game Warning as the name; '<Team>?' as each home-screen icon", d: "", rec: true},
+     {t: "A new name and its own domain", d: "Tell me the name."},
+     {t: "Keep 'Mavs?' only", d: ""}]},
+ E2: {map: "E", title: "What the money is for",
+   why: "At 1,000 fans, non-gambling ads earn single-digit dollars a month. The answer sets how much legal and licensing work is worth doing.",
+   opts: [
+     {t: "Cover hosting and data costs this season", d: "", rec: true},
+     {t: "Side income", d: ""},
+     {t: "A business", d: "Means data licences, state affiliate licences and a lawyer."}]},
+ E3: {map: "E", title: "Whether gambling ads stay in the plan",
+   why: "Your sketch: free first, gambling ads later. The research found four hard edges: sportsbooks pay through private deals and usually require a vendor licence in each state; ads need 21+, the 1-800-GAMBLER line and geo-targeting; live odds would spoil the page, so only static ads before or after a game fit; and any revenue needs commercial data rights (B7). ESPN BET closed in November 2025; DraftKings is now ESPN's partner.",
+   opts: [
+     {t: "Keep them, but only after data rights and 10,000 fans; static ads before and after games only", d: "Start with streaming affiliates (League Pass, Fubo) and a sponsor.", rec: true},
+     {t: "Drop gambling ads", d: ""},
+     {t: "Keep them as the first ads", d: "Needs the licences first."}]},
+ E4: {map: "E", title: "Where an ad may appear without spoiling",
+   why: "See <a href='#phones'>the sponsor-slot mock-up</a>. An ad that names tonight's teams or shows a line can say who is winning.",
+   opts: [
+     {t: "Only on the Next-game preview and on finished games; never during play; never odds or tonight's teams", d: "", rec: true},
+     {t: "Anywhere, as long as it shows no odds", d: ""}]},
+ E5: {map: "E", title: "When ads switch on",
+   why: "Gives the free-launch Spec its finish line.",
+   opts: [
+     {t: "When hosting and data cost more than $20 a month, or at 1,000 weekly fans", d: "", rec: true},
+     {t: "From the second season", d: ""},
+     {t: "From launch", d: ""}]},
+ E6: {map: "E", title: "Where the first free fans come from",
+   why: "Reddit blocks bots without moderator approval; a search page needs public hosting.",
+   opts: [
+     {t: "Friends first, then r/Mavericks game threads with the moderators' approval", d: "", rec: true},
+     {t: "A Bluesky or Discord bot that posts each night's Verdict", d: ""},
+     {t: "Search pages ('is the Mavs game worth watching')", d: ""}]},
+ C6: {map: "C", title: "How a spoiler-safe highlight link looks", kind: "proto",
+   why: "See the two Highlights mock-ups in <a href='#phones'>What the phone could show</a>: a rounded button that says only 'Highlights', under the Verdict.",
+   opts: [
+     {t: "A plain 'Highlights' button under the Verdict, opening YouTube", d: "", rec: true},
+     {t: "A separate Highlights page with the reel embedded behind a tap", d: ""},
+     {t: "Something else", d: "Describe it in the note."}]},
+ E7: {map: "E", title: "Ask affiliates what they pay a spoiler-free page", kind: "task",
+   why: "Writing to DraftKings, FanDuel and a streaming affiliate is outward-facing, so it waits for your yes. It also waits on E3.",
+   opts: [
+     {t: "Not yet", d: "", rec: true},
+     {t: "Yes, once E3 is settled", d: ""}]},
+};
+const WORDS = [
+  {k: "W1", title: "Fan", why: "The person using the page.", opts: [{t: "Adopt 'Fan'; avoid user, viewer", rec: true}, {t: "Another word", d: "Say which in the note."}]},
+  {k: "W2", title: "Follow", why: "A fan's choice of a team, with the criteria that apply to it (from B4).", opts: [{t: "Adopt 'Follow'", rec: true}, {t: "Another word", d: ""}]},
+  {k: "W3", title: "Criteria", why: "You wrote 'filter', 'criteria' and 'personal watchability'. Proposed: Criteria are the Stay away line, return band and story events that apply to one Follow. Avoid filters, settings.", opts: [{t: "Adopt 'Criteria'", rec: true}, {t: "Use 'Filters'", d: ""}]},
+  {k: "W4", title: "Game story and Story event", why: "You wrote 'the live score and the game story'. Proposed: the game story is the course a game takes, read from its play-by-play; a Story event is one thing in it that makes the game worth watching (overtime, a comeback). The recap article is not the game story.", opts: [{t: "Adopt both", rec: true}, {t: "I meant the recap article", d: ""}, {t: "Something else", d: ""}]},
+  {k: "W5", title: "Return band", why: "How far below the Stay away line the opponent must drop before a Stay away game returns to Watch (from A3).", opts: [{t: "Adopt 'Return band'", rec: true}, {t: "Another word", d: ""}]},
+  {k: "W6", title: "Highlight reel", why: "The league's one full-game highlights video for a game; a clip is one play.", opts: [{t: "Adopt 'Highlight reel' and 'clip'", rec: true}, {t: "Another word", d: ""}]},
+];
+const FIRST = ["A4", "B7", "D2", "A3", "A7", "P1"];
+const MAPNAMES = {A: "A · Personal watchability", B: "B · All teams, each with its own criteria", C: "C · Highlights, and which ones to show", D: "D · License, scaling, hosting and installation", E: "E · Advertisers: free to start, paid by ads later", P: "Projectify"};
+const MAPLEDE = {
+  A: "Defining the ways to filter the live score and the game story to judge personal watchability. Settled so far: what signals exist (A1) and how the line behaved last season (A2). Still being researched: the order of live Readings (A8, after Monday's recording).",
+  B: "Scaling to all teams, with different criteria for different teams. Settled so far: which leagues have Readings (B1), how to poll every game (B2), ESPN's terms and licensed feeds (B3). Also settled: our own win-probability model can stand in for ESPN's (B8).",
+  C: "Linking highlights, with criteria for which highlights, folded into the teams Map. Settled so far: sources, spoilers and embedding rules (C1), and how to find each game's reel (C5: the NBA's uploads playlist page, no key needed; the Mavericks' own channel is @mavericks, whose spotlight titles carry stat lines).",
+  D: "License, scaling, hosting and installation. Settled so far: license options, hosting prices, install paths and cost at scale (D1).",
+  E: "Finding advertisers so it can be free and still earn. Settled so far: how affiliates pay, gambling-ad rules and other ads' earnings (E1).",
+  P: "Making it a Factory project.",
+};
+
+// --- state ---
+const store = JSON.parse(localStorage.getItem("bgw-answers") || "{}");
+const allQ = () => [...Object.entries(Q).map(([k, q]) => [k, q]), ...WORDS.map(w => [w.k, {...w, map: "W"}])];
+function beadOf(k) { const b = MAPDATA.beads[k]; return b ? b : null; }
+function blockersOpen(k) {
+  return (MAPDATA.edges.filter(e => e[0] === k).map(e => e[1])).filter(b => MAPDATA.beads[b] && !MAPDATA.beads[b].closed);
+}
+function unblocks(k) { return MAPDATA.edges.filter(e => e[1] === k).map(e => e[0]); }
+function chosen(k, q) { return store[k] && store[k].opt != null ? store[k].opt : q.opts.findIndex(o => o.rec); }
+function save() { localStorage.setItem("bgw-answers", JSON.stringify(store)); counts(); }
+
+function card(k, q) {
+  const b = beadOf(k);
+  const kind = q.kind || (b ? b.kind : "grilling");
+  const tagc = {grilling: "grill", task: "task", proto: "proto", prototype: "proto"}[kind] || "grill";
+  const blocked = blockersOpen(k);
+  const el = document.createElement("div");
+  el.className = "q" + (store[k] && store[k].touched ? " answered" : "") + (blocked.length ? " blocked" : "");
+  el.id = "q-" + k;
+  const ub = unblocks(k).map(u => MAPDATA.beads[u] ? `${MAPDATA.beads[u].title} (${u})` : u);
+  el.innerHTML = `<div><span class="tag ${tagc}">${kind === "proto" ? "prototype" : kind}</span> ${q.urgent ? '<span class="tag urgent">urgent</span>' : ""} <span class="tag" style="text-transform:none">${k}${b ? " · " + b.id : ""}</span></div>
+    <h3>${q.title}</h3><div class="why">${q.why}</div>
+    <div class="opts">${q.opts.map((o, i) => `<label class="opt"><input type="radio" name="r-${k}" value="${i}"><span>${o.t} ${o.rec ? '<span class="tag rec">recommended</span>' : ""}</span>${o.d ? `<span class="d">${o.d}</span>` : ""}</label>`).join("")}</div>
+    <textarea placeholder="Anything to add, or a different answer…">${(store[k] && store[k].note) || ""}</textarea>
+    <div class="meta">${blocked.length ? "Waits on: " + blocked.map(x => `<a href="#q-${x}">${x}</a>`).join(", ") + ". You can still answer now. " : ""}${ub.length ? "Unblocks: " + ub.join("; ") + "." : ""}</div>`;
+  const pick = chosen(k, q);
+  el.querySelectorAll("input").forEach((inp, i) => {
+    if (i === pick) { inp.checked = true; inp.closest(".opt").classList.add("chosen"); }
+    inp.addEventListener("change", () => {
+      store[k] = {...(store[k] || {}), opt: i, touched: true}; save();
+      el.querySelectorAll(".opt").forEach((o, j) => o.classList.toggle("chosen", j === i)); el.classList.add("answered");
+    });
+  });
+  el.querySelector("textarea").addEventListener("input", e => { store[k] = {...(store[k] || {}), note: e.target.value, touched: true}; save(); el.classList.add("answered"); });
+  return el;
+}
+function render() {
+  const host = document.getElementById("questions");
+  for (const m of ["A", "B", "C", "D", "E", "P"]) {
+    const s = document.createElement("section"); s.id = "q" + m;
+    s.innerHTML = `<h2>${MAPNAMES[m]} ${m !== "P" && MAPDATA.maps[m] ? `<small>${MAPDATA.maps[m].id}</small>` : ""}</h2><p class="lede">${MAPLEDE[m]}</p>`;
+    if (m !== "P" && MAPDATA.maps[m]) {
+      const dest = MAPDATA.maps[m].destination.map(d => `<li>${d}</li>`).join("");
+      const ny = MAPDATA.maps[m].not_yet.map(d => `<li>${d}</li>`).join("");
+      s.innerHTML += `<div class="two"><div class="card"><b class="sans">Destination: the Specs this Map leads to</b><ul>${dest}</ul></div><div class="card"><b class="sans">Not yet specified</b><ul>${ny}</ul></div></div>`;
+    }
+    Object.entries(Q).filter(([k, q]) => q.map === m).forEach(([k, q]) => s.appendChild(card(k, q)));
+    host.appendChild(s);
+  }
+  const w = document.getElementById("wordq");
+  WORDS.forEach(x => w.appendChild(card(x.k, {...x, kind: "grilling"})));
+  const f = document.getElementById("firstlist");
+  FIRST.forEach((k, i) => {
+    const q = Q[k]; const n = unblocks(k).length;
+    const d = document.createElement("div"); d.className = "card"; d.style.margin = "10px 0";
+    d.innerHTML = `<span class="sans" style="font-weight:700;font-size:1.3rem;color:var(--blue);margin-right:10px">${i + 1}</span><a href="#q-${k}" class="sans" style="font-weight:600;color:var(--ink)">${q.title}</a> ${q.urgent ? '<span class="tag urgent">urgent</span>' : ""}<div style="margin:4px 0 0 30px;color:#444;font-size:.93rem">${{A4: "Today's page gives away every finished game's result. Matters from Monday's game.", B7: "Blocks gambling ads, public hosting and every money question.", D2: "Blocks the license, notifications, name and growth questions.", A3: "Decides whether the late-game flicker you may have seen stays.", A7: "A yes lets me record Monday's game so the live-ordering question can be answered.", P1: "Finishes the projectify step: GitHub repo and Factory registration."}[k]}${n ? ` Unblocks ${n} Bead${n > 1 ? "s" : ""} directly.` : ""}</div>`;
+    f.appendChild(d);
+  });
+  counts();
+}
+function counts() {
+  const qs = allQ(); let n = 0; const per = {};
+  qs.forEach(([k, q]) => { const t = store[k] && store[k].touched; if (t) n++; per[q.map] = per[q.map] || [0, 0]; per[q.map][1]++; if (t) per[q.map][0]++; });
+  document.getElementById("navcount").textContent = `${n} of ${qs.length}`;
+  document.getElementById("navbar").style.width = (100 * n / qs.length) + "%";
+  document.querySelectorAll("[data-c]").forEach(e => { const p = per[e.dataset.c]; if (p) e.textContent = `${p[0]}/${p[1]}`; });
+}
+document.getElementById("copy").addEventListener("click", () => {
+  const lines = ["Answers to the Bad Game Warning handoff (docs/handoff.html), " + new Date().toISOString().slice(0, 10) + ":", ""];
+  allQ().forEach(([k, q]) => {
+    const i = chosen(k, q); const b = beadOf(k); const s = store[k] || {};
+    lines.push(`- ${q.title} (${b ? b.id : k}): ${q.opts[i].t}${s.touched ? "" : " [recommended, not changed]"}${s.note ? " | Note: " + s.note.replace(/\n/g, " ") : ""}`);
+  });
+  const text = lines.join("\n");
+  navigator.clipboard.writeText(text).then(() => { document.getElementById("msg").textContent = "Copied. Paste it into a pi session in this repo."; },
+    () => { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); document.getElementById("msg").textContent = "Copied."; });
+});
+document.getElementById("reset").addEventListener("click", () => { if (confirm("Clear your answers and notes?")) { localStorage.removeItem("bgw-answers"); location.reload(); } });
+
+// --- Map diagram ---
+function drawMaps() {
+  const svg = document.getElementById("mapsvg");
+  const cols = ["A", "B", "C", "D", "E"], colW = 196, rowH = 54, top = 70, w = 176;
+  const pos = {}; let maxRows = 0;
+  cols.forEach((m, ci) => {
+    const keys = Object.keys(MAPDATA.beads).filter(k => k[0] === m).sort((a, b) => +a.slice(1) - +b.slice(1));
+    maxRows = Math.max(maxRows, keys.length);
+    keys.forEach((k, ri) => pos[k] = [20 + ci * colW, top + ri * rowH]);
+  });
+  const H = top + maxRows * rowH + 20, W = 20 + cols.length * colW;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", "100%"); svg.style.minWidth = "820px";
+  let s = `<defs><marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs>`;
+  cols.forEach((m, ci) => {
+    const t = MAPDATA.maps[m];
+    s += `<rect x="${12 + ci * colW}" y="8" width="${w + 16}" height="${H - 16}" rx="12" fill="${m === "C" ? "#efe8f6" : "#f1ece1"}" stroke="#d9d3c5"/>`;
+    s += `<text x="${20 + ci * colW}" y="32" font-size="12" font-weight="700">${{A: "A · Personal watchability", B: "B · All teams", C: "C · Highlights", D: "D · License, hosting", E: "E · Advertisers"}[m]}</text><text x="${20 + ci * colW}" y="50" font-size="10.5" fill="#666">${t.id}${m === "C" ? " · inside B" : ""}</text>`;
+  });
+  MAPDATA.edges.forEach(([a, b]) => {
+    if (!pos[a] || !pos[b]) return;
+    const [x1, y1] = pos[b], [x2, y2] = pos[a];
+    const sx = x1 + (x2 > x1 ? w : x2 < x1 ? 0 : w), sy = y1 + 20, ex = x2 + (x2 > x1 ? 0 : x2 < x1 ? w : w), ey = y2 + 20;
+    const bend = x1 === x2 ? 40 : 0;
+    s += `<path d="M${sx} ${sy} C ${sx + (x1 === x2 ? bend : (ex - sx) / 2)} ${sy}, ${ex - (x1 === x2 ? -bend : (ex - sx) / 2)} ${ey}, ${ex} ${ey}" fill="none" stroke="#555" stroke-width="1.3" stroke-dasharray="${x1 === x2 ? "" : "4 3"}" marker-end="url(#am)" opacity=".75"/>`;
+  });
+  Object.entries(MAPDATA.beads).forEach(([k, b]) => {
+    if (!pos[k]) return; const [x, y] = pos[k];
+    const researching = false, task = b.kind === "task";
+    const blocked = !b.closed && blockersOpen(k).length;
+    const fill = b.closed ? "#2f6b3a" : researching ? "#a86b00" : task ? "#6b4a00" : blocked ? "#fff" : "#0064b1";
+    const tc = blocked && !b.closed && !researching && !task ? "#333" : "#fff";
+    const label = b.title.length > 30 ? b.title.slice(0, 29) + "…" : b.title;
+    s += `<a href="${Q[k] ? "#q-" + k : "#evidence"}"><g style="cursor:pointer"><title>${k} · ${b.id}\n${b.title}</title><rect x="${x}" y="${y}" width="${w}" height="40" rx="8" fill="${fill}" stroke="${blocked ? "#8d9093" : "none"}" stroke-width="2"/>
+      <text x="${x + 8}" y="${y + 16}" font-size="10" font-weight="700" fill="${tc}">${k} · ${b.kind}${b.closed ? " · settled" : ""}</text><text x="${x + 8}" y="${y + 31}" font-size="10.5" fill="${tc}">${label}</text></g></a>`;
+  });
+  svg.innerHTML = s;
+}
+
+// --- Win-probability chart ---
+let G = "sa", L = 0.95, B = 0;
+const WINDOW = 1080, END = 2880;
+function clock(el) { if (el >= END) return "OT"; const q = Math.floor(el / 720) + 1, left = 720 - el % 720; return `Q${q} ${Math.floor(left / 60)}:${String(Math.round(left % 60)).padStart(2, "0")}`; }
+function drawWP() {
+  const raw = SERIES[G].slice().sort((a, b) => a[0] - b[0]);
+  const maxT = Math.max(END, raw[raw.length - 1][0]);
+  const X = t => 50 + t / maxT * 930, Y = p => 20 + (1 - p) * 230;
+  let s = `<rect x="${X(0)}" y="20" width="${X(WINDOW) - X(0)}" height="230" fill="#ece6d8"/>`;
+  [0, .25, .5, .75, 1].forEach(p => s += `<line x1="50" x2="980" y1="${Y(p)}" y2="${Y(p)}" stroke="#eee"/><text x="44" y="${Y(p) + 4}" font-size="10" text-anchor="end">${p * 100}%</text>`);
+  [0, 720, 1440, 2160, 2880].forEach((t, i) => s += `<line x1="${X(t)}" x2="${X(t)}" y1="20" y2="250" stroke="#ddd"/>${i < 4 ? `<text x="${X(t + 360)}" y="266" font-size="11" text-anchor="middle">Q${i + 1}</text>` : ""}`);
+  s += `<line x1="50" x2="980" y1="${Y(L)}" y2="${Y(L)}" stroke="#7a1f1f" stroke-width="1.5" stroke-dasharray="5 3"/><text x="978" y="${Y(L) - 4}" font-size="10" fill="#7a1f1f" text-anchor="end">line ${Math.round(L * 100)}%</text>`;
+  if (B) s += `<line x1="50" x2="980" y1="${Y(L - B)}" y2="${Y(L - B)}" stroke="#0064b1" stroke-width="1.2" stroke-dasharray="2 3"/><text x="978" y="${Y(L - B) + 12}" font-size="10" fill="#0064b1" text-anchor="end">back to Watch at ${Math.round((L - B) * 100)}%</text>`;
+  s += `<polyline fill="none" stroke="#0d1b2a" stroke-width="1.4" points="${raw.map(([t, p]) => `${X(t).toFixed(1)},${Y(p).toFixed(1)}`).join(" ")}"/>`;
+  let v = null, flips = 0, first = null, segs = [];
+  raw.forEach(([t, p], i) => {
+    let nv = t < WINDOW ? "early" : (v === "stay" ? (p <= L - B ? "watch" : "stay") : (p > L ? "stay" : "watch"));
+    if (nv === "stay" && first == null) first = t;
+    if (v === "stay" && nv === "watch" && t <= END - 120) flips++;
+    const t2 = i + 1 < raw.length ? raw[i + 1][0] : t + 5;
+    if (segs.length && segs[segs.length - 1][2] === nv) segs[segs.length - 1][1] = t2; else segs.push([t, t2, nv]);
+    v = nv;
+  });
+  const col = {early: "#bbb", watch: "#0064b1", stay: "#7a1f1f"};
+  segs.forEach(([a, b, k]) => s += `<rect x="${X(a)}" y="282" width="${Math.max(.6, X(b) - X(a))}" height="22" fill="${col[k]}"/>`);
+  s += `<text x="50" y="320" font-size="10.5">Verdict the page would show: grey Too early to call, blue Watch, red Stay away. Readings sorted by game time.</text>`;
+  document.getElementById("wpsvg").innerHTML = s;
+  document.getElementById("readout").innerHTML = first == null ? `With this line, the page never shows Stay away in this game.` :
+    `First Stay away at <b>${clock(first)}</b>. Flips back to Watch before the last 2:00: <b>${flips}</b>.`;
+}
+document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { G = b.dataset.g; document.querySelectorAll("[data-g]").forEach(x => x.classList.toggle("on", x === b)); drawWP(); });
+document.querySelectorAll("[data-l]").forEach(b => b.onclick = () => { L = +b.dataset.l; document.querySelectorAll("[data-l]").forEach(x => x.classList.toggle("on", x === b)); drawWP(); });
+document.querySelectorAll("[data-b]").forEach(b => b.onclick = () => { B = +b.dataset.b; document.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x === b)); drawWP(); });
+document.querySelector("#bt tbody").innerHTML = BACKTEST.map(r => `<tr class="${r.line === .95 ? "current" : ""}"><td>${Math.round(r.line * 100)}%${r.line === .95 ? " (today)" : ""}</td><td class="num">${r.fired}</td><td class="num">${r.wrong}</td><td class="num">${r.median}</td><td class="num">${r.flips}</td><td class="num">${r.band}</td></tr>`).join("");
+render(); drawMaps(); drawWP();
+</script>
+</body>
+</html>

@@ -1,5 +1,28 @@
 # Agent Instructions
 
+## This project
+
+Bad Game Warning tells one fan, without spoilers, whether that day's Dallas Mavericks game is worth watching from behind. Its words are in `GLOSSARY.md`; read it before naming anything. Its future is charted as five Wayfinder Maps in Beads (`bd list --label wayfinder:map`); `docs/handoff.html` lays out their open questions for the Boss.
+
+Rules every change must keep:
+
+- The phone never receives the score, clock, quarter or win-probability percentage, not even in the page source. Only the Verdict and its one-line detail leave the server.
+- The Verdict follows only the latest Reading, so a game can go from Stay away back to Watch.
+- `app.py` stays one dependency-free Python file until a Spec says otherwise.
+
+## Build & Test
+
+```bash
+python3 -m unittest                                   # tests (test_app.py)
+python3 app.py                                        # serve on port 8765 (PORT to change)
+launchctl kickstart -k gui/$UID/com.bradley.bad-game-warning   # restart the always-on copy after editing
+python3 docs/research/backtest.py 2026                # replay the rule over the 2025-26 season
+```
+
+## Architecture Overview
+
+`app.py` answers each page load by fetching the Mavericks schedule from ESPN's public site API, finding today's game, and, if it has tipped off, fetching that game's summary and judging its latest win-probability Reading against the Stay away line (95%) inside the Judging window (6:00 left in the 2nd quarter onward). It renders one full-screen colour page that refreshes every 60 seconds. A launchd agent (`com.bradley.bad-game-warning.plist`) keeps it running on the Boss's Mac. Research notes for the Maps are in `docs/research/`.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database
