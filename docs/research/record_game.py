@@ -4,10 +4,13 @@ Usage: python3 docs/research/record_game.py <event id> [folder]
 The folder defaults to ~/.local/share/bad-game-warning/recordings/<event id>, outside the repo,
 so recordings never reach git. Each file is named by the UTC time it was fetched. Before
 tip-off the script checks every five minutes; it stops once ESPN marks the game final.
+Once the game is live it holds a caffeinate assertion so the Mac does not idle-sleep mid-game,
+while the hours of waiting before tip-off leave sleep alone.
 """
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -21,6 +24,7 @@ def main():
     folder = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser(
         f"~/.local/share/bad-game-warning/recordings/{event}")
     os.makedirs(folder, exist_ok=True)
+    awake = None
     while True:
         try:
             with urllib.request.urlopen(f"{ESPN}/summary?event={event}", timeout=20) as response:
@@ -33,6 +37,8 @@ def main():
         if game_state == "pre":
             time.sleep(300)
             continue
+        if awake is None:
+            awake = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         with open(os.path.join(folder, f"{stamp}.json"), "wb") as out:
             out.write(body)
