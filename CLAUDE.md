@@ -60,11 +60,12 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## This project
 
-Bad Game Warning tells one fan, without spoilers, whether that day's Dallas Mavericks game is worth watching from behind. Its words are in `GLOSSARY.md`; read it before naming anything. Its future is charted as five Wayfinder Maps in Beads (`bd list --label wayfinder:map`); `docs/handoff.html` lays out their open questions for the Boss.
+RadioSilence (called Bad Game Warning until the Boss renamed it on 2026-11-14) tells one fan, without spoilers, whether that day's Dallas Mavericks game is worth watching from behind. Its words are in `GLOSSARY.md`; read it before naming anything. Its future is charted as five Wayfinder Maps in Beads (`bd list --label wayfinder:map`); `docs/handoff.html` lays out their open questions for the Boss.
 
 Rules every change must keep:
 
-- The phone never receives the score, clock, quarter or win-probability percentage, not even in the page source. Only the Verdict and its one-line detail leave the server.
+- The phone never receives anything about a game later than the moment the fan names in the catch-up box score, not even in the page source. With no moment named, only the Verdict and its one-line detail leave the server: no score, clock, quarter or win-probability percentage (the Boss, 2026-11-14).
+- The page never makes clear whether a game is over, because a game still going when it ought to have ended gives away overtime. It hides the tip-off time once a game has started, and warns a fan whose only settings judge the final that the timing of a hint can give away overtime (the Boss, 2026-11-14).
 - The Verdict follows only the latest Reading, so a game can go from Stay away back to Watch.
 - `app.py` stays one dependency-free Python file until a Spec says otherwise.
 
