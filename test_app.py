@@ -1,15 +1,18 @@
 import json
 import os
+import re
+import struct
 import time
 import unittest
 import urllib.error
 from datetime import date, datetime
+from html.parser import HTMLParser
 
 # Expected times below are Dallas local time.
 os.environ["TZ"] = "America/Chicago"
 time.tzset()
 
-from app import CACHE_SECONDS, Cached, respond
+from app import CACHE_SECONDS, Cached, HTML_TYPE, respond
 from judging import ESPN, judge
 
 GAME_DAY = date(2026, 10, 23)
@@ -247,12 +250,6 @@ class RowsResponseTest(unittest.TestCase):
         self.assertEqual(set(rows["BOS"]), set(rows["IND"]))
         self.assertEqual(set(rows["BOS"]), {"team", "verdict", "detail", "next_game"})
 
-    def test_the_root_page_still_shows_the_mavericks_next_game(self):
-        status, content_type, body = respond("/", NOW, espn(night()))
-        self.assertEqual(status, 200)
-        self.assertIn("Next game", body.decode())
-        self.assertIn("Today, 7:30 PM vs Houston Rockets", body.decode())
-
     def test_names_espn_does_not_know_do_not_blank_the_other_rows(self):
         status, content_type, body = respond("/rows?teams=BOS,XYZ,NEW%20YORK", NOW, espn(night()))
         self.assertEqual(status, 200)
@@ -281,6 +278,184 @@ class RowsResponseTest(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertNotIn("rows", json.loads(body))
         self.assertIn("error", json.loads(body))
+
+
+class Tags(HTMLParser):
+    """Every start tag in a page, with its attributes, in the order it appears."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found = []
+
+    def handle_starttag(self, tag, attrs):
+        self.found.append((tag, dict(attrs)))
+
+
+class Words(HTMLParser):
+    """The text a browser would show for a piece of markup."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def tags(markup):
+    parser = Tags()
+    parser.feed(markup)
+    return parser.found
+
+
+def words(markup):
+    parser = Words()
+    parser.feed(markup)
+    return " ".join("".join(parser.parts).split())
+
+
+def cards(page):
+    """The cards on a list page, by team, each as its own markup."""
+    return dict(re.findall(r'<article class="card" data-team="([^"]+)">(.*?)</article>', page, re.S))
+
+
+def summary_text(card):
+    return words(re.search(r"<summary>(.*?)</summary>", card, re.S).group(1))
+
+
+def checked_teams(page):
+    return sorted(attrs["value"] for tag, attrs in tags(page)
+                  if tag == "input" and attrs.get("name") == "teams" and "checked" in attrs)
+
+
+class PageTest(unittest.TestCase):
+    def page(self, path="/", get=None):
+        status, content_type, body = respond(path, NOW, get or espn(night()))
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, HTML_TYPE)
+        return body.decode()
+
+    def test_the_first_visit_opens_team_setup(self):
+        page = self.page("/")
+        self.assertIn(("form", {"id": "setup", "method": "get", "action": "/"}), tags(page))
+        self.assertEqual(cards(page), {})
+
+    def test_setup_offers_all_thirty_teams_by_abbreviation(self):
+        values = [attrs["value"] for tag, attrs in tags(self.page("/"))
+                  if tag == "input" and attrs.get("name") == "teams"]
+        self.assertEqual(sorted(values), sorted(NBA_TEAMS))
+
+    def test_the_page_saves_picked_teams_on_the_phone(self):
+        self.assertRegex(self.page("/"), r'localStorage\.setItem\("radiosilence\.teams", picked\)')
+
+    def test_the_page_sends_a_fan_with_saved_teams_to_their_cards(self):
+        page = self.page("/")
+        self.assertRegex(page, r'localStorage\.getItem\("radiosilence\.teams"\)')
+        self.assertIn('location.replace("/?teams=" + encodeURIComponent(saved))', page)
+
+    def test_picking_teams_shows_one_card_per_team(self):
+        page = self.page("/?teams=LAL&teams=BOS&teams=IND")
+        self.assertEqual(sorted(cards(page)), ["BOS", "IND", "LAL"])
+
+    def test_the_list_header_shows_only_the_app_name_and_the_gear(self):
+        page = self.page("/?teams=LAL")
+        header = re.search(r"<header>(.*?)</header>", page, re.S).group(1)
+        self.assertEqual(words(header), "RadioSilence ⚙︎")
+        self.assertEqual(next(attrs for tag, attrs in tags(header) if tag == "a")["href"],
+                         "/?setup=1&teams=LAL")
+
+    def test_the_comma_joined_teams_the_script_saves_show_one_card_each(self):
+        # The script saves the picks joined with commas, so a reload arrives as one `teams` value.
+        self.assertEqual(sorted(cards(self.page("/?teams=LAL,BOS"))), ["BOS", "LAL"])
+
+    def test_the_gear_reopens_setup_with_the_fans_teams_ticked(self):
+        page = self.page("/?teams=LAL&teams=BOS")
+        gear = next(attrs for tag, attrs in tags(page) if attrs.get("class") == "gear")
+        setup = self.page(gear["href"])
+        self.assertEqual(checked_teams(setup), ["BOS", "LAL"])
+
+    def assert_dot(self, team, verdict, dot_class, colour):
+        """The card's dot: its class and the Verdict it labels, no Verdict word, and the colour it paints."""
+        page = self.page(f"/?teams={team}")
+        card = cards(page)[team]
+        dot = next(attrs for tag, attrs in tags(card) if "dot" in (attrs.get("class") or ""))
+        self.assertEqual(dot["class"], f"dot {dot_class}")
+        self.assertEqual(dot["aria-label"], verdict)
+        self.assertNotIn(verdict, summary_text(card))
+        self.assertIn(f"--{dot_class}:{colour};", page)  # the palette holds the colour...
+        self.assertIn(f".dot.{dot_class} {{ background:var(--{dot_class}); }}", page)  # ...and paints with it
+
+    def test_a_watch_card_has_a_green_dot_and_no_verdict_word(self):
+        self.assert_dot("LAL", "Watch", "watch", "#2e9e5b")
+
+    def test_a_stay_away_card_has_a_red_dot_and_no_verdict_word(self):
+        self.assert_dot("BOS", "Stay away", "stay", "#c0392b")
+
+    def test_a_too_early_card_has_a_yellow_dot_and_no_verdict_word(self):
+        self.assert_dot("IND", "Too early to call", "early", "#e3b341")
+
+    def test_a_team_with_no_started_game_shows_its_next_game_preview(self):
+        card = cards(self.page("/?teams=DAL"))["DAL"]
+        self.assertIn("Today, 7:30 PM vs Houston Rockets", summary_text(card))
+
+    def test_tapping_a_card_outside_its_buttons_opens_the_rule_applied_to_it(self):
+        card = cards(self.page("/?teams=BOS"))["BOS"]
+        self.assertIn("<details>", card)
+        self.assertNotIn("<details open", card)
+        self.assertIn("Stay away above 95% from 6:00 left in the 2nd quarter.", words(card))
+        self.assertNotIn("<button", re.search(r"<summary>(.*?)</summary>", card, re.S).group(1))
+
+    def test_the_highlights_button_says_no_highlights_yet_and_is_disabled(self):
+        card = cards(self.page("/?teams=BOS"))["BOS"]
+        attributes, label = re.search(r'<button class="highlights"([^>]*)>(.*?)</button>',
+                                       card, re.S).groups()
+        self.assertIn("disabled", attributes)
+        self.assertEqual(words(label), "No highlights yet")
+
+    def test_the_list_refreshes_after_a_minute(self):
+        self.assertIn(("meta", {"http-equiv": "refresh", "content": "60"}),
+                      tags(self.page("/?teams=DAL")))
+
+    def test_the_page_says_plainly_when_espn_cannot_be_reached(self):
+        def offline(url):
+            raise urllib.error.URLError("offline")
+        page = self.page("/?teams=BOS", get=offline)
+        self.assertIn("Couldn't reach ESPN (URLError).", words(page))
+        self.assertEqual(sorted(cards(page)), ["BOS"])
+
+    def test_the_page_is_addable_to_the_home_screen_as_radiosilence(self):
+        page = self.page("/")
+        found = tags(page)
+        self.assertIn(("link", {"rel": "manifest", "href": "/manifest.webmanifest"}), found)
+        self.assertIn(("meta", {"name": "apple-mobile-web-app-capable", "content": "yes"}), found)
+        self.assertIn(("meta", {"name": "apple-mobile-web-app-title", "content": "RadioSilence"}), found)
+        self.assertIn(("link", {"rel": "apple-touch-icon", "href": "/icon-180.png"}), found)
+        self.assertEqual(re.search(r"<title>(.*?)</title>", page, re.S).group(1), "RadioSilence")
+
+    def test_the_manifest_names_the_app_radiosilence(self):
+        status, content_type, body = respond("/manifest.webmanifest", NOW, espn(night()))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["name"], "RadioSilence")
+
+    def test_the_manifest_icon_is_a_served_png(self):
+        manifest = json.loads(respond("/manifest.webmanifest", NOW, espn(night()))[2])
+        self.assertTrue(manifest["icons"])
+        for icon in manifest["icons"]:
+            status, content_type, body = respond(icon["src"], NOW, espn(night()))
+            self.assertEqual(status, 200)
+            self.assertEqual(content_type, "image/png")
+            self.assertTrue(body.startswith(b"\x89PNG\r\n\x1a\n"))
+            width, height = struct.unpack(">II", body[16:24])
+            self.assertEqual(f"{width}x{height}", icon["sizes"])
+
+    def test_a_live_game_puts_no_score_clock_quarter_or_percentage_in_the_page_or_its_script(self):
+        page = self.page("/?teams=BOS&teams=IND&teams=LAL&teams=DAL&teams=SA")
+        # 95% and 6:00 are the fixed rule the rules panel states, not a Reading from this game.
+        self.assertIn("Stay away above 95% from 6:00 left in the 2nd quarter.", page)
+        for spoiler in ["117", "104", "88", "91", "96", "77", "7:12", "8:00", "3:00", "0:00",
+                        "3rd", "4th", "0.9931", "0.6234", "0.0312", "0.2010",
+                        "12:00 PM", "6:10 PM", "5:40 PM", "overtime", "final"]:
+            self.assertNotIn(spoiler, page, spoiler)
 
 
 class CachingTest(unittest.TestCase):

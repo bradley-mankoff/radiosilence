@@ -2,11 +2,11 @@
 from behind.
 
 The phone names its teams with each request, and the server keeps no per-fan state. judging.py works out
-each team's row from ESPN's public JSON, and this file serves those rows, sharing ESPN answers for a short
-while. The answer never includes a score, clock, quarter, percentage, or a started game's tip-off time.
+each team's row from ESPN's public JSON; page.py turns those rows into the page; and this file serves
+both, sharing ESPN answers for a short while. No answer includes a score, clock, quarter, percentage, or a
+started game's tip-off time.
 """
 
-import html
 import json
 import os
 import threading
@@ -15,14 +15,16 @@ import urllib.request
 from collections import namedtuple
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from judging import TEAM_LIST, judge
+import page
+from judging import TEAM_LIST, espn_abbreviations, judge, row
 
-TEAM = "DAL"  # the Mavericks, for the root page that predates the team list
 CACHE_SECONDS = 30  # one ESPN fetch per URL per cycle; the page refreshes every 60 seconds
 TEAM_LIST_SECONDS = 24 * 60 * 60  # ESPN's team list changes only between seasons
 PORT = int(os.environ.get("PORT", "8765"))
+STATIC_DIR = Path(__file__).resolve().with_name("static")
 
 
 def lifetime_for(url):
@@ -57,45 +59,47 @@ class Cached:
             return self.saved[url].body
 
 
-PAGE = """<!doctype html>
-<html><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Mavs?">
-<meta http-equiv="refresh" content="60">
-<title>Mavs?</title>
-<style>
-  body {{ margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center;
-         justify-content: center; font-family: -apple-system, sans-serif; text-align: center;
-         background: {background}; color: white; }}
-  h1 {{ font-size: 3.5rem; margin: 0 1rem; }}
-  p {{ font-size: 1.3rem; opacity: .85; margin: 1rem; }}
-</style>
-</head><body><h1>{headline}</h1><p>{detail}</p></body></html>"""
-
-COLORS = {"Watch": "#0064b1", "Stay away": "#7a1f1f"}
 # ESPN not answering, or answering with bad JSON; a bug in judging must not read as ESPN being down.
 ESPN_UNREACHABLE = (OSError, ValueError)
 JSON_TYPE = "application/json; charset=utf-8"
 HTML_TYPE = "text/html; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
 
-
-def headline_for(row):
-    """The root page's words for one team's row: its Verdict, its Next game, or the end of its season."""
-    if row["verdict"]:
-        return row["verdict"], row["detail"]
-    preview = row["next_game"]
-    if preview:
-        where = "vs" if preview["home"] else "at"
-        return "Next game", f"{preview['day']}, {preview['time']} {where} {preview['opponent']}"
-    return "No upcoming games", row["detail"]
+# Only these files are served from disk, so a request cannot reach any other path.
+STATIC_FILES = {
+    "manifest.webmanifest": "application/manifest+json; charset=utf-8",
+    "icon-180.png": "image/png",
+    "icon-512.png": "image/png",
+}
 
 
 def espn_outage(error):
-    """The phone's words for ESPN not answering, the same in a row's error and on the root page."""
+    """The phone's words for ESPN not answering, the same in a row's error and on the page."""
     return f"Couldn't reach ESPN ({type(error).__name__})."
+
+
+def named_teams(values):
+    """The team names in a query's `teams` values, whether repeated or one comma-joined value."""
+    names = []
+    for value in values:
+        names.extend(value.split(","))
+    return list(dict.fromkeys(name.strip().upper() for name in names if name.strip()))
+
+
+def root_page(query, now, get):
+    """The page at `/` for `query`: team setup, or the list of cards for the teams it names."""
+    params = parse_qs(query)
+    names = named_teams(params.get("teams", []))
+    showing_setup = "setup" in params or not names
+    try:
+        if showing_setup:
+            return page.setup_screen(sorted(espn_abbreviations(get)), names)
+        return page.list_screen(judge(names, now.date(), get))
+    except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
+        outage = espn_outage(error)
+        if showing_setup:
+            return page.setup_screen([], names, outage)
+        return page.list_screen([row(name) for name in names], outage)
 
 
 def respond(path, now, get):
@@ -105,21 +109,16 @@ def respond(path, now, get):
     """
     url = urlsplit(path)
     if url.path == "/rows":
-        names = parse_qs(url.query).get("teams", [""])[0].split(",")
-        teams = list(dict.fromkeys(name.strip().upper() for name in names if name.strip()))
         try:
-            rows = judge(teams, now.date(), get)
-        except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
+            rows = judge(named_teams(parse_qs(url.query).get("teams", [])), now.date(), get)
+        except ESPN_UNREACHABLE as error:
             return 503, JSON_TYPE, json.dumps({"error": espn_outage(error)}).encode()
         return 200, JSON_TYPE, json.dumps({"rows": rows}).encode()
+    static = url.path[1:]
+    if static in STATIC_FILES:  # the manifest and its icons, by name, so no other path reaches disk
+        return 200, STATIC_FILES[static], (STATIC_DIR / static).read_bytes()
     if url.path == "/":
-        try:
-            headline, detail = headline_for(judge([TEAM], now.date(), get)[0])
-        except ESPN_UNREACHABLE as error:  # show the failure on the phone instead of a blank page
-            headline, detail = "Can't tell", espn_outage(error)
-        body = PAGE.format(headline=html.escape(headline), detail=html.escape(detail),
-                           background=COLORS.get(headline, "#333")).encode()
-        return 200, HTML_TYPE, body
+        return 200, HTML_TYPE, root_page(url.query, now, get).encode()
     return 404, TEXT_TYPE, b"Not found"
 
 

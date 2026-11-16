@@ -1,21 +1,21 @@
-# Bad Game Warning
+# RadioSilence
 
-Tells you whether tonight's Dallas Mavericks game is worth watching from behind, without spoilers.
+Tells a fan, without spoilers, whether each followed NBA team's game is worth watching from behind.
 
-`app.py` reads ESPN's public win-probability data for today's Mavericks game and shows one verdict:
+Open the page and pick any number of the 30 NBA teams. The phone remembers the picks, and the main screen shows one card per team with only a coloured dot for the Verdict:
 
-- **Stay away**: from 6:00 left in the 2nd quarter onward, the latest reading gives the opponent more than a 95% chance to win.
-- **Watch**: the rule applies and the opponent is at 95% or below. The verdict follows the latest reading, so a game that comes back goes from Stay away to Watch again, and the open page refreshes itself every minute.
-- **Too early to call**: the game is on but hasn't reached 6:00 left in the 2nd quarter.
-- **Next game**: no game is under way today, so the page shows the next game's day, time and opponent. A game that finished today still gets its verdict, for watching from behind.
-- **Can't tell**: ESPN couldn't be reached.
+- **Watch** (green): the game is still worth watching.
+- **Stay away** (red): from 6:00 left in the 2nd quarter onward, the opponent's latest win-probability Reading is above 95%.
+- **Too early to call** (yellow): the game has tipped off but has not reached the Judging window.
 
-The Mac computes the verdict and the page contains only that verdict: no score, clock, or percentage.
+A team with no started game shows its next game's day, time and opponent instead. Tap a card to see the rule applied to it. The page refreshes itself every minute, and says plainly when ESPN cannot be reached. A finished game keeps its Verdict until midnight.
+
+The Mac computes the Verdicts and the page contains only them: no score, clock, quarter or win-probability percentage. The catch-up view and End Highlights come in later Specs; the highlights button is there and disabled for now.
 
 ## Running
 
 A launchd agent (`com.bradley.bad-game-warning.plist`, copied to `~/Library/LaunchAgents/`) starts the server at login on port 8765.
-Open `http://Bradleys-MacBook-Pro-2.local:8765/` on the home network.
+Open `http://Bradleys-MacBook-Pro-2.local:8765/` on the home network, or the Tailscale Serve address from the phone. In Safari, Share, Add to Home Screen adds it as RadioSilence.
 
 Restart after editing: `launchctl kickstart -k gui/$UID/com.bradley.bad-game-warning`.
 Tests: `python3 -m unittest`.
