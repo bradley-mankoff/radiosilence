@@ -1,20 +1,37 @@
-"""Bad Game Warning: tells you whether tonight's Dallas Mavericks game is worth watching from behind.
+"""RadioSilence: tells a fan, without spoilers, whether each followed NBA team's game is worth watching
+from behind.
 
-The server fetches ESPN's public win-probability data and sends the phone only a verdict,
-never a score, clock, or percentage, so nothing on the page or in its source can spoil the game.
+The phone names its teams with each request, and the server keeps no per-fan state. judging.py works out
+each team's row from ESPN's public JSON, and this file serves those rows, sharing ESPN answers for a short
+while. The answer never includes a score, clock, quarter, percentage, or a started game's tip-off time.
 """
 
 import html
 import json
 import os
+import threading
+import time
 import urllib.request
+from collections import namedtuple
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
-TEAM = "DAL"
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-STAY_AWAY_ODDS = 0.95  # opponent win probability above this means the game is out of reach
+from judging import TEAM_LIST, judge
+
+TEAM = "DAL"  # the Mavericks, for the root page that predates the team list
+CACHE_SECONDS = 30  # one ESPN fetch per URL per cycle; the page refreshes every 60 seconds
+TEAM_LIST_SECONDS = 24 * 60 * 60  # ESPN's team list changes only between seasons
 PORT = int(os.environ.get("PORT", "8765"))
+
+
+def lifetime_for(url):
+    """How long an ESPN answer is reused: a game's JSON for a cycle, the team list for a day."""
+    return TEAM_LIST_SECONDS if url == TEAM_LIST else CACHE_SECONDS
+
+
+# One kept ESPN answer: when it was fetched, how long it lasts, and the JSON it holds.
+Saved = namedtuple("Saved", "at lifetime body")
 
 
 def fetch(url):
@@ -22,84 +39,22 @@ def fetch(url):
         return json.load(response)
 
 
-def start_time(event):
-    return datetime.fromisoformat(event["date"].replace("Z", "+00:00")).astimezone()
+class Cached:
+    """Wraps a fetch so each URL's JSON is reused for its lifetime, shared by every request."""
 
+    def __init__(self, get, clock=time.monotonic):
+        self.get, self.clock = get, clock
+        self.saved = {}  # url -> Saved
+        self.lock = threading.Lock()  # so two requests at once cannot both fetch the same URL
 
-def state(event):
-    """ESPN's game state: 'pre', 'in' or 'post'."""
-    return event["competitions"][0]["status"]["type"]["state"]
-
-
-def todays_game(schedule, today):
-    """Return the schedule event for the Mavericks game on `today` (local date), or None."""
-    for event in schedule["events"]:
-        if start_time(event).date() == today:
-            return event
-    return None
-
-
-def next_game(schedule, today):
-    """Return (headline, detail) previewing the next game that hasn't tipped off."""
-    for event in schedule["events"]:
-        if state(event) != "pre":
-            continue
-        start = start_time(event)
-        day = "Today" if start.date() == today else f"{start:%a, %b} {start.day}"
-        mavs, opponent = sorted(event["competitions"][0]["competitors"],
-                                key=lambda c: c["team"]["abbreviation"] != TEAM)
-        where = "vs" if mavs["homeAway"] == "home" else "at"
-        return "Next game", f"{day}, {start:%-I:%M %p} {where} {opponent['team']['displayName']}"
-    return "No upcoming games", "The Mavericks have no more games scheduled."
-
-
-def seconds_left(clock):
-    """ESPN shows '6:00' above one minute and '45.2' below it."""
-    minutes, _, seconds = clock.rpartition(":")
-    return int(minutes or 0) * 60 + float(seconds)
-
-
-def game_time(play):
-    """Sorts plays by when they happened in the game: later periods, then less time left."""
-    return play["period"]["number"], -seconds_left(play["clock"]["displayValue"])
-
-
-def verdict(summary):
-    """Return (headline, detail) for one game's ESPN summary."""
-    competition = summary["header"]["competitions"][0]
-    mavs_home = any(c["homeAway"] == "home" and c["team"]["abbreviation"] == TEAM
-                    for c in competition["competitors"])
-    plays = {play["id"]: play for play in summary.get("plays", [])}
-    readings = [r for r in summary.get("winprobability", []) if r["playId"] in plays]
-    if not readings:
-        return "No data yet", "ESPN hasn't published win probability for this game yet."
-
-    # ESPN appends late stat corrections to the end of the list, so the last Reading is not always
-    # the latest play; take the latest in game time, and the later one in the list on a tie.
-    latest = max(reversed(readings), key=lambda r: game_time(plays[r["playId"]]))
-    play = plays[latest["playId"]]
-    period = play["period"]["number"]
-    left = seconds_left(play["clock"]["displayValue"])
-    # The rule applies only from 6:00 left in the 2nd quarter onward.
-    if period < 2 or (period == 2 and left > 6 * 60):
-        return "Too early to call", "Check back after the middle of the 2nd quarter."
-
-    # Judged on the latest reading alone, so a game that comes back goes from Stay away to Watch again.
-    home = latest["homeWinPercentage"]
-    opponent = 1 - home if mavs_home else home
-    if opponent > STAY_AWAY_ODDS:
-        return "Stay away", "This one looks out of reach."
-    return "Watch", "Still a game."
-
-
-def current_verdict():
-    schedule = fetch(f"{ESPN}/teams/{TEAM.lower()}/schedule")
-    today = datetime.now().astimezone().date()
-    game = todays_game(schedule, today)
-    # A game that finished today still gets a verdict, since you may be about to watch it from behind.
-    if game is None or state(game) == "pre":
-        return next_game(schedule, today)
-    return verdict(fetch(f"{ESPN}/summary?event={game['id']}"))
+    def __call__(self, url):
+        with self.lock:
+            now = self.clock()
+            self.saved = {cached_url: entry for cached_url, entry in self.saved.items()
+                          if now - entry.at < entry.lifetime}
+            if url not in self.saved:
+                self.saved[url] = Saved(now, lifetime_for(url), self.get(url))
+            return self.saved[url].body
 
 
 PAGE = """<!doctype html>
@@ -120,21 +75,62 @@ PAGE = """<!doctype html>
 </head><body><h1>{headline}</h1><p>{detail}</p></body></html>"""
 
 COLORS = {"Watch": "#0064b1", "Stay away": "#7a1f1f"}
+# ESPN not answering, or answering with bad JSON; a bug in judging must not read as ESPN being down.
+ESPN_UNREACHABLE = (OSError, ValueError)
+JSON_TYPE = "application/json; charset=utf-8"
+HTML_TYPE = "text/html; charset=utf-8"
+TEXT_TYPE = "text/plain; charset=utf-8"
+
+
+def headline_for(row):
+    """The root page's words for one team's row: its Verdict, its Next game, or the end of its season."""
+    if row["verdict"]:
+        return row["verdict"], row["detail"]
+    preview = row["next_game"]
+    if preview:
+        where = "vs" if preview["home"] else "at"
+        return "Next game", f"{preview['day']}, {preview['time']} {where} {preview['opponent']}"
+    return "No upcoming games", row["detail"]
+
+
+def espn_outage(error):
+    """The phone's words for ESPN not answering, the same in a row's error and on the root page."""
+    return f"Couldn't reach ESPN ({type(error).__name__})."
+
+
+def respond(path, now, get):
+    """Return (status, content type, body bytes) for a GET of `path`.
+
+    `now` sets the Game day and `get` returns ESPN's JSON for a URL (the server passes a Cached fetch).
+    """
+    url = urlsplit(path)
+    if url.path == "/rows":
+        names = parse_qs(url.query).get("teams", [""])[0].split(",")
+        teams = list(dict.fromkeys(name.strip().upper() for name in names if name.strip()))
+        try:
+            rows = judge(teams, now.date(), get)
+        except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
+            return 503, JSON_TYPE, json.dumps({"error": espn_outage(error)}).encode()
+        return 200, JSON_TYPE, json.dumps({"rows": rows}).encode()
+    if url.path == "/":
+        try:
+            headline, detail = headline_for(judge([TEAM], now.date(), get)[0])
+        except ESPN_UNREACHABLE as error:  # show the failure on the phone instead of a blank page
+            headline, detail = "Can't tell", espn_outage(error)
+        body = PAGE.format(headline=html.escape(headline), detail=html.escape(detail),
+                           background=COLORS.get(headline, "#333")).encode()
+        return 200, HTML_TYPE, body
+    return 404, TEXT_TYPE, b"Not found"
+
+
+CACHE = Cached(fetch)
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path != "/":
-            self.send_error(404)
-            return
-        try:
-            headline, detail = current_verdict()
-        except Exception as error:  # show the failure on the phone instead of a blank page
-            headline, detail = "Can't tell", f"Couldn't reach ESPN ({type(error).__name__})."
-        body = PAGE.format(headline=html.escape(headline), detail=html.escape(detail),
-                           background=COLORS.get(headline, "#333")).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        status, content_type, body = respond(self.path, datetime.now().astimezone(), CACHE)
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)

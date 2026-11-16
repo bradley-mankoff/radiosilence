@@ -1,7 +1,8 @@
 import sys, os, json
 sys.path.insert(0, "docs/research"); sys.path.insert(0, ".")  # run from the repo root
 import backtest as b
-from app import ESPN, TEAM
+from app import TEAM
+from judging import ESPN
 cache="/tmp/bgw-season-2026"; os.makedirs(cache, exist_ok=True)
 sch=b.cached(f"{ESPN}/teams/dal/schedule?season=2026&seasontype=2", f"{cache}/schedule.json")
 games=[]

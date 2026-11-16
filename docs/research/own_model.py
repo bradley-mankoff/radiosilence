@@ -22,7 +22,8 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from app import TEAM, seconds_left  # noqa: E402
+from app import TEAM  # noqa: E402
+from judging import seconds_left  # noqa: E402
 
 LAST_TWO_MINUTES = 48 * 60 - 120  # game seconds elapsed when 2:00 is left in Q4
 

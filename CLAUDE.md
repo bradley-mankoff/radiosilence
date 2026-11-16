@@ -67,12 +67,12 @@ Rules every change must keep:
 - The phone never receives anything about a game later than the moment the fan names in the catch-up box score, not even in the page source. With no moment named, only the Verdict and its one-line detail leave the server: no score, clock, quarter or win-probability percentage (the Boss, 2026-11-14).
 - The page never makes clear whether a game is over, because a game still going when it ought to have ended gives away overtime. It hides the tip-off time once a game has started, and warns a fan whose only settings judge the final that the timing of a hint can give away overtime (the Boss, 2026-11-14).
 - The Verdict follows only the latest Reading, so a game can go from Stay away back to Watch.
-- `app.py` stays one dependency-free Python file until a Spec says otherwise.
+- The server stays dependency-free standard-library Python and may be several files: `app.py` serves the page and the JSON rows, and `judging.py` works out each team's row from ESPN's JSON (allowed by the Spec of bad_game_warning-452).
 
 ## Build & Test
 
 ```bash
-python3 -m unittest                                   # tests (test_app.py)
+python3 -m unittest                                   # tests (test_app.py, covering judging.py and app.py)
 python3 app.py                                        # serve on port 8765 (PORT to change)
 launchctl kickstart -k gui/$UID/com.bradley.bad-game-warning   # restart the always-on copy after editing
 python3 docs/research/backtest.py 2026                # replay the rule over the 2025-26 season
@@ -80,4 +80,4 @@ python3 docs/research/backtest.py 2026                # replay the rule over the
 
 ## Architecture Overview
 
-`app.py` answers each page load by fetching the Mavericks schedule from ESPN's public site API, finding today's game, and, if it has tipped off, fetching that game's summary and judging its latest win-probability Reading against the Stay away line (95%) inside the Judging window (6:00 left in the 2nd quarter onward). It renders one full-screen colour page that refreshes every 60 seconds. A launchd agent (`com.bradley.bad-game-warning.plist`) keeps it running on the Boss's Mac. Research notes for the Maps are in `docs/research/`.
+`/rows?teams=DAL,BOS` answers with one row per named team for today: its Verdict, or its Next-game preview when no game has started. `judging.py` accepts a name only when ESPN's list of the 30 NBA teams has it, or it is one of the common short names for those teams (NYK, GSW, SAS, NOP, UTA, WAS), then gets the row from ESPN's scoreboard, one summary per started game and a team's schedule only for a preview; any other name gets its own row that says so. It judges the latest win-probability Reading (in game time) against the Stay away line (95%) inside the Judging window (6:00 left in the 2nd quarter onward). `app.py` serves those rows, caches ESPN's game JSON for 30 seconds and its team list for a day, and still serves the Mavericks page at `/`, which refreshes every 60 seconds. A launchd agent (`com.bradley.bad-game-warning.plist`) keeps it running on the Boss's Mac. Research notes for the Maps are in `docs/research/`.

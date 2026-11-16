@@ -11,7 +11,8 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from app import ESPN, TEAM, seconds_left  # noqa: E402
+from app import TEAM  # noqa: E402
+from judging import ESPN, seconds_left  # noqa: E402
 
 LAST_TWO_MINUTES = 48 * 60 - 120  # game seconds elapsed when 2:00 is left in the 4th
 
@@ -27,7 +28,7 @@ def readings(summary):
     """(seconds elapsed, opponent win probability, inside the judging window) for each reading, in game-time order.
 
     ESPN appends late stat corrections to the end of its list, so the list is sorted by game time,
-    keeping ESPN's order on ties, as app.py's verdict() does when it picks the latest Reading.
+    keeping ESPN's order on ties, as judging.py's verdict() does when it picks the latest Reading.
     """
     competitors = summary["header"]["competitions"][0]["competitors"]
     mavs_home = any(c["homeAway"] == "home" and c["team"]["abbreviation"] == TEAM for c in competitors)
