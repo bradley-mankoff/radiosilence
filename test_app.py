@@ -205,19 +205,19 @@ def game_play(play_id, period, clock, team, type_text, text, short, participants
             "shootingPlay": shooting, "pointsAttempted": attempted}
 
 
-def roster_player(player_id, name):
+def roster_player(player_id, name, starter=False):
     """One athlete in ESPN's boxscore. The stat values are absurd on purpose: catch-up reads names and ids only."""
-    return {"athlete": {"id": player_id, "displayName": name}, "starter": False,
+    return {"athlete": {"id": player_id, "displayName": name}, "starter": starter,
             "didNotPlay": False, "stats": ["99", "99"]}
 
 
 def roster_team(team_id, team, players):
-    """One team in ESPN's boxscore, with its roster in ESPN's order."""
+    """One team in ESPN's boxscore, with its roster in ESPN's order. A player is (id, name) when he came
+    off the bench, or (id, name, True) when he tipped off."""
     abbreviation, name = team
     return {"team": {"id": team_id, "abbreviation": abbreviation, "displayName": name},
             "statistics": [{"labels": ["MIN", "PTS"],
-                            "athletes": [roster_player(player_id, player_name)
-                                         for player_id, player_name in players]}]}
+                            "athletes": [roster_player(*player) for player in players]}]}
 
 
 def handmade_game(extra_plays=()):
@@ -263,12 +263,37 @@ def handmade_game(extra_plays=()):
             ],
         }]},
         "boxscore": {"players": [
-            roster_team(DAL_ID, DAL, [("d1", "Luka Doncic"), ("d2", "Kyrie Irving"),
-                                      ("d3", "Dereck Lively II")]),
-            roster_team(BOS_ID, BOS, [("b1", "Jayson Tatum"), ("b2", "Jaylen Brown")]),
+            roster_team(DAL_ID, DAL, [("d1", "Luka Doncic", True), ("d2", "Kyrie Irving", True),
+                                      ("d3", "Dereck Lively II", True)]),
+            roster_team(BOS_ID, BOS, [("b1", "Jayson Tatum", True), ("b2", "Jaylen Brown", True)]),
         ]},
         "plays": plays + list(extra_plays),
     }
+
+
+def substitution_game():
+    """A hand-built game whose Dallas lineup changes twice: d1 sits down 6:00 into the 1st, and d6 plays
+    out the quarter and through the break until d1 comes back 3:00 into the 2nd. Dallas tips off with d1
+    to d5, Boston with b1 and b2."""
+    game = handmade_game()
+    game["boxscore"]["players"][0] = roster_team(DAL_ID, DAL, [
+        ("d1", "Luka Doncic", True), ("d2", "Kyrie Irving", True), ("d3", "Dereck Lively II", True),
+        ("d4", "P.J. Washington", True), ("d5", "Klay Thompson", True),
+        ("d6", "Naji Marshall")])
+    game["plays"] = [
+        game_play("sub1", 1, "6:00", DAL_ID, "Substitution",
+                  "Naji Marshall enters the game for Luka Doncic", "Substitution", ("d6", "d1")),
+        game_play("q1-end", 1, "0:00", None, "End Period", "End of the 1st Quarter", "End of 1st"),
+        game_play("sub2", 2, "9:00", DAL_ID, "Substitution",
+                  "Luka Doncic enters the game for Naji Marshall", "Substitution", ("d1", "d6")),
+        game_play("q2-end", 2, "0:00", None, "End Period", "End of the 2nd Quarter", "End of 2nd"),
+    ]
+    return game
+
+
+def minutes_by_name(answer):
+    """The minutes the catch-up answer gives each player, by name."""
+    return {player["name"]: player["minutes"] for player in answer["players"]}
 
 
 def expected_play(play_id, period, clock, team, text):
@@ -673,13 +698,13 @@ class CatchUpAnswerTest(unittest.TestCase):
              **line(points=2, field_goals_made=1, field_goals_attempted=2, threes_attempted=1)},
         ])
         self.assertEqual(answer["players"], [
-            {"id": "d1", "name": "Luka Doncic", "team": "DAL",
+            {"id": "d1", "name": "Luka Doncic", "team": "DAL", "minutes": 2.0,
              **line(points=2, field_goals_made=1, field_goals_attempted=1)},
-            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", **line(assists=1)},
-            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", **line(rebounds=1)},
-            {"id": "b1", "name": "Jayson Tatum", "team": "BOS",
+            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", "minutes": 2.0, **line(assists=1)},
+            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", "minutes": 2.0, **line(rebounds=1)},
+            {"id": "b1", "name": "Jayson Tatum", "team": "BOS", "minutes": 2.0,
              **line(points=2, field_goals_made=1, field_goals_attempted=2, threes_attempted=1)},
-            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", **line()},
+            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", "minutes": 2.0, **line()},
         ])
 
     def test_mid_quarter_plays_run_newest_first_in_espn_text(self):
@@ -707,14 +732,15 @@ class CatchUpAnswerTest(unittest.TestCase):
                     free_throws_made=1, free_throws_attempted=2, steals=1)},
         ])
         self.assertEqual(answer["players"], [
-            {"id": "d1", "name": "Luka Doncic", "team": "DAL",
+            {"id": "d1", "name": "Luka Doncic", "team": "DAL", "minutes": 12.0,
              **line(points=2, field_goals_made=1, field_goals_attempted=1, turnovers=1)},
-            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", **line(assists=1)},
-            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", **line(rebounds=1, fouls=1)},
-            {"id": "b1", "name": "Jayson Tatum", "team": "BOS",
+            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", "minutes": 12.0, **line(assists=1)},
+            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", "minutes": 12.0,
+             **line(rebounds=1, fouls=1)},
+            {"id": "b1", "name": "Jayson Tatum", "team": "BOS", "minutes": 12.0,
              **line(points=3, field_goals_made=1, field_goals_attempted=2, threes_attempted=1,
                     free_throws_made=1, free_throws_attempted=2)},
-            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", **line(steals=1)},
+            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", "minutes": 12.0, **line(steals=1)},
         ])
 
     def test_a_quarter_break_play_list_runs_from_the_period_whistle_back_to_tip_off(self):
@@ -802,6 +828,34 @@ class CatchUpAnswerTest(unittest.TestCase):
         self.assertEqual(next(player for player in answer["players"] if player["id"] == "b1")["points"], 0)
         for spoiler in ["LATER", "9:45", "9:20", '"away": 6', '"points": 3', "99"]:
             self.assertNotIn(spoiler, body.decode(), spoiler)
+
+
+class CatchUpMinutesTest(unittest.TestCase):
+    def test_a_substitution_hands_the_floor_over_at_its_own_play(self):
+        minutes = minutes_by_name(catch_up(substitution_game(), "1st", 6, 0))
+        self.assertEqual((minutes["Luka Doncic"], minutes["Naji Marshall"]), (6.0, 0.0))
+
+    def test_a_substitute_keeps_counting_through_the_quarter_break(self):
+        minutes = minutes_by_name(catch_up(substitution_game(), "2nd", 9, 0))
+        self.assertEqual((minutes["Naji Marshall"], minutes["Luka Doncic"]), (9.0, 6.0))
+
+    def test_every_minute_of_the_half_belongs_to_one_dallas_player(self):
+        # 24 minutes in the half with five players on the floor each minute, however often they swap.
+        answer = catch_up(substitution_game(), "2nd", 0, 0)
+        dallas = [player["minutes"] for player in answer["players"] if player["team"] == "DAL"]
+        self.assertEqual(sum(dallas), 120.0)
+
+    def test_a_moment_past_the_latest_play_counts_no_minutes_after_it(self):
+        game = handmade_game()
+        game["plays"] = [
+            game_play("p1", 1, "12:00", DAL_ID, "Jumpball",
+                      "Dereck Lively II vs. Jayson Tatum (Luka Doncic gains possession)", "Jump Ball",
+                      ("d3", "b1")),
+            game_play("p2", 1, "5:00", DAL_ID, "Jump Shot",
+                      "Luka Doncic makes 18-foot jump shot", "+2 Points", ("d1",),
+                      scoring=True, score=2, shooting=True),
+        ]
+        self.assertEqual(minutes_by_name(catch_up(game, "1st", 0, 0))["Luka Doncic"], 7.0)
 
 
 class PresetsResponseTest(unittest.TestCase):
@@ -1076,34 +1130,52 @@ class PageTest(unittest.TestCase):
 SEASON_CACHE = "/tmp/bgw-season-2026"
 
 
-def official_lines(game):
-    """ESPN's own final boxscore lines by player id, read here to compare against the replay."""
-    lines = {}
+def official_stats(game):
+    """ESPN's own stat values by label, with the player's id, for every athlete its boxscore gives
+    stats to; read here to compare against the replay."""
     for team in game["boxscore"]["players"]:
         statistics = team["statistics"][0]
-        labels = statistics["labels"]
         for athlete in statistics["athletes"]:
             if not athlete.get("stats") or "id" not in athlete.get("athlete", {}):
                 continue
-            values = dict(zip(labels, athlete["stats"]))
-            field_goals, threes, free_throws = (values["FG"].split("-"), values["3PT"].split("-"),
-                                               values["FT"].split("-"))
-            lines[athlete["athlete"]["id"]] = {
-                "points": int(values["PTS"]),
-                "field_goals_made": int(field_goals[0]),
-                "field_goals_attempted": int(field_goals[1]),
-                "threes_made": int(threes[0]),
-                "threes_attempted": int(threes[1]),
-                "free_throws_made": int(free_throws[0]),
-                "free_throws_attempted": int(free_throws[1]),
-                "rebounds": int(values["REB"]),
-                "assists": int(values["AST"]),
-                "steals": int(values["STL"]),
-                "blocks": int(values["BLK"]),
-                "turnovers": int(values["TO"]),
-                "fouls": int(values["PF"]),
-            }
+            yield athlete["athlete"]["id"], dict(zip(statistics["labels"], athlete["stats"]))
+
+
+def official_lines(game):
+    """ESPN's own final boxscore lines by player id, read here to compare against the replay."""
+    lines = {}
+    for player_id, values in official_stats(game):
+        field_goals, threes, free_throws = (values["FG"].split("-"), values["3PT"].split("-"),
+                                           values["FT"].split("-"))
+        lines[player_id] = {
+            "points": int(values["PTS"]),
+            "field_goals_made": int(field_goals[0]),
+            "field_goals_attempted": int(field_goals[1]),
+            "threes_made": int(threes[0]),
+            "threes_attempted": int(threes[1]),
+            "free_throws_made": int(free_throws[0]),
+            "free_throws_attempted": int(free_throws[1]),
+            "rebounds": int(values["REB"]),
+            "assists": int(values["AST"]),
+            "steals": int(values["STL"]),
+            "blocks": int(values["BLK"]),
+            "turnovers": int(values["TO"]),
+            "fouls": int(values["PF"]),
+        }
     return lines
+
+
+def official_minutes(game):
+    """ESPN's own minutes by player id, read here to compare against the replay. A player who did not
+    play has none."""
+    return {player_id: int(values["MIN"]) for player_id, values in official_stats(game)
+            if values["MIN"] not in ("--", "")}
+
+
+def replayed_players(game):
+    """Each player's row as the replay gives it for the whole game, by player id, so a full-game
+    comparison reads the replay the same way however many stats it checks."""
+    return {player["id"]: player for player in catch_up(game, "OT", 50, 59)["players"]}
 
 
 def game_final_margin(game):
@@ -1181,7 +1253,7 @@ class SeasonReplayTest(unittest.TestCase):
             if not game.get("plays") or not game.get("boxscore", {}).get("players"):
                 continue
             games += 1
-            rebuilt = {player["id"]: player for player in catch_up(game, "OT", 50, 59)["players"]}
+            rebuilt = replayed_players(game)
             for player_id, official in official_lines(game).items():
                 for field, expected in official.items():
                     compared[field] += 1
@@ -1196,6 +1268,20 @@ class SeasonReplayTest(unittest.TestCase):
         for field in ("field_goals_attempted", "threes_attempted", "rebounds", "assists",
                       "steals", "blocks", "turnovers", "fouls"):
             self.assertGreaterEqual(rates[field], 0.99, field)
+
+    def test_a_full_game_replay_gives_each_player_his_official_minutes(self):
+        compared, within, exact, games = 0, 0, 0, 0
+        for _, game, _, _ in cached_season():
+            games += 1
+            rebuilt = {player_id: row["minutes"] for player_id, row in replayed_players(game).items()}
+            for player_id, official in official_minutes(game).items():
+                compared += 1
+                within += abs(rebuilt[player_id] - official) <= 1
+                exact += round(rebuilt[player_id]) == official
+        print(f"\n{games} cached 2025-26 games replayed; {within} of {compared} players "
+              f"({within / compared:.1%}, {exact} of them to the minute) within a minute of ESPN's")
+        self.assertEqual(games, 82)
+        self.assertGreater(within / compared, 0.99)
 
 
 class CachingTest(unittest.TestCase):
