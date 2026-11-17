@@ -135,6 +135,7 @@ def row_for(team, responses, day=GAME_DAY, fan=None):
 OPPONENT = ("MIA", "Miami Heat")
 NO_BLOWOUT_LOSSES = Settings(picked=["blow"])
 WINS_FOR_MY_TEAM = Settings(picked=["wins"])
+CLOSE_GAMES = Settings(picked=["close"])
 
 
 def one_game_row(team, plays, team_at_home=False, fan=None, state="in",
@@ -148,6 +149,32 @@ def one_game_row(team, plays, team_at_home=False, fan=None, state="in",
                                               home_score=home_score, away_score=away_score),
     }
     return row_for(team[0], responses, fan=fan)
+
+
+def scored_summary(home, away, plays, state="in"):
+    """An ESPN summary whose plays each carry the score after them, in ESPN's list order.
+
+    plays is a list of (period, clock, home score, away score); the last one is the game's score so far.
+    """
+    game = summary(home, away, [], state=state,
+                   home_score=str(plays[-1][2]), away_score=str(plays[-1][3]))
+    game["plays"] = [{"id": str(i), "period": {"number": period}, "clock": {"displayValue": clock},
+                      "homeScore": home_score, "awayScore": away_score}
+                     for i, (period, clock, home_score, away_score) in enumerate(plays)]
+    return game
+
+
+def scored_responses(team, plays, state="in"):
+    """ESPN's saved answers for `team` at home against Miami, whose plays each carry the score after them."""
+    return {
+        SCOREBOARD: {"events": [event("solo", "2026-10-23T23:10Z", state, (team, "0"), (OPPONENT, "0"))]},
+        f"{ESPN}/summary?event=solo": scored_summary(team, OPPONENT, plays, state),
+    }
+
+
+def scored_game_row(team, plays, state="in", fan=None):
+    """Judge `team` at home against Miami from the score after each play: (period, clock, team, Miami)."""
+    return row_for(team[0], scored_responses(team, plays, state), fan=fan)
 
 
 # The catch-up tests use their own two teams and players, so every expected line is a small literal.
@@ -380,6 +407,59 @@ class JudgingTest(unittest.TestCase):
 
     def test_a_late_stat_correction_at_the_end_of_the_list_is_read_in_game_time(self):
         row = one_game_row(IND, [(4, "6:00", 0.30), (2, "5:30", 0.99)], fan=NO_BLOWOUT_LOSSES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_close_games_stays_away_from_a_blowout_win(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 55, 25),
+                                    (3, "12:00", 80, 50), (4, "12:00", 100, 70), (4, "6:00", 105, 80),
+                                    (4, "4:00", 110, 85), (4, "0:00", 120, 90)],
+                              state="post", fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_close_games_watches_a_close_win(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:00", 5, 4), (2, "12:00", 40, 42),
+                                    (3, "12:00", 60, 65), (4, "12:00", 80, 80), (4, "5:00", 88, 86),
+                                    (4, "2:00", 95, 96), (4, "0:00", 101, 100)],
+                              state="post", fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_close_games_watches_a_close_loss(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:00", 5, 4), (2, "12:00", 40, 42),
+                                    (3, "12:00", 60, 65), (4, "12:00", 80, 80), (4, "5:00", 86, 88),
+                                    (4, "2:00", 96, 95), (4, "0:00", 100, 101)],
+                              state="post", fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_before_the_last_minutes_a_game_without_close_along_the_way_stays_away(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 40, 20),
+                                    (3, "12:00", 70, 40), (4, "12:00", 80, 70), (4, "6:00", 85, 82)],
+                              fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_close_along_the_way_watches_a_tight_game_before_the_last_minutes(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "6:00", 20, 22), (2, "12:00", 40, 44),
+                                    (3, "12:00", 60, 65), (4, "12:00", 80, 82), (4, "6:00", 85, 84)],
+                              fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_inside_the_last_minutes_a_close_ending_watches_after_a_blowout(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 50, 20),
+                                    (3, "12:00", 80, 50), (4, "12:00", 100, 70), (4, "4:30", 105, 100),
+                                    (4, "4:00", 107, 104)],
+                              fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_inside_the_last_minutes_without_a_close_ending_stays_away(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 50, 20),
+                                    (3, "12:00", 80, 50), (4, "12:00", 100, 70), (4, "4:30", 112, 100),
+                                    (4, "4:00", 114, 104)],
+                              fan=CLOSE_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_an_overtime_game_watches_under_close_games(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 50, 20),
+                                    (3, "12:00", 80, 50), (4, "0:00", 100, 100), (5, "0:00", 120, 110)],
+                              state="post", fan=CLOSE_GAMES)
         self.assertEqual(row["verdict"], "Watch")
 
     def test_wins_for_my_team_is_too_early_before_the_final(self):
@@ -668,13 +748,23 @@ class PresetsResponseTest(unittest.TestCase):
         self.assertEqual(content_type, JSON_TYPE)
         answer = json.loads(body)
         self.assertEqual([preset["name"] for preset in answer["presets"]],
-                         ["Wins for my team", "No blowout losses"])
+                         ["Wins for my team", "No blowout losses", "Close games"])
         self.assertEqual(answer["presets"][0], {"key": "wins", "name": "Wins for my team", "sliders": []})
         self.assertEqual(answer["presets"][1]["sliders"], [
             {"parameter": "blow_upper", "name": "Stay away above",
              "min": 90, "max": 99, "default": 98, "unit": "%"},
             {"parameter": "blow_lower", "name": "Back to Watch below",
              "min": 85, "max": 98, "default": 95, "unit": "%"},
+        ])
+        self.assertEqual(answer["presets"][2]["sliders"], [
+            {"parameter": "close_points", "name": "Close ending within",
+             "min": 1, "max": 20, "default": 5, "unit": "points"},
+            {"parameter": "close_minutes", "name": "Close ending in the last",
+             "min": 1, "max": 12, "default": 5, "unit": "minutes"},
+            {"parameter": "along_points", "name": "Close along the way within",
+             "min": 1, "max": 20, "default": 9, "unit": "points"},
+            {"parameter": "along_share", "name": "Close along the way for over",
+             "min": 1, "max": 99, "default": 66, "unit": "%"},
         ])
         self.assertEqual([slider["parameter"] for slider in answer["shared"]], ["judge_from", "freeze_at"])
         self.assertEqual([slider["default"] for slider in answer["shared"]], [1080, 2580])
@@ -712,6 +802,24 @@ class PresetSettingsTest(unittest.TestCase):
                      if slider["parameter"] == "blow_upper")["default"]
         self.assertEqual(self.blow_row([(3, "8:00", upper / 100)])["verdict"], "Watch")
         self.assertEqual(self.blow_row([(3, "8:00", (upper + 1) / 100)])["verdict"], "Stay away")
+
+    def close_row(self, plays, query=""):
+        """The DAL row for one live home game against Miami, judged from the query's Preset settings.
+
+        plays is a list of (period, clock, Dallas score, Miami score).
+        """
+        status, content_type, body = respond(f"/rows?teams=DAL&presets=close{query}", NOW,
+                                             espn(scored_responses(DAL, plays)))
+        self.assertEqual(status, 200)
+        return json.loads(body)["rows"][0]
+
+    def test_a_close_games_slider_moves_the_verdict(self):
+        # A 7-point margin at 4:30 left in the 4th is outside the shipped 5 points, inside a fan's 7.
+        plays = [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 50, 20),
+                 (3, "12:00", 80, 50), (4, "12:00", 100, 70), (4, "4:30", 107, 100),
+                 (4, "4:00", 109, 102)]
+        self.assertEqual(self.close_row(plays)["verdict"], "Stay away")
+        self.assertEqual(self.close_row(plays, "&close_points=7")["verdict"], "Watch")
 
 
 class Tags(HTMLParser):
@@ -925,32 +1033,58 @@ def official_lines(game):
     return lines
 
 
+def game_final_margin(game):
+    """The final score's margin, read from ESPN's own header rather than from the replay."""
+    sides = game["header"]["competitions"][0]["competitors"]
+    return abs(int(sides[0]["score"]) - int(sides[1]["score"]))
+
+
+def cached_season():
+    """Every cached 2025-26 game that has plays: its event, ESPN's summary of it, its Game day and the
+    answers judge reads it from, so each replay test walks the season the same way."""
+    with open(f"{SEASON_CACHE}/schedule.json") as saved:
+        schedule = json.load(saved)
+    completed = [event for event in schedule["events"]
+                 if event["competitions"][0]["status"]["type"]["state"] == "post"]
+    games = []
+    for event in completed:
+        with open(f"{SEASON_CACHE}/{event['id']}.json") as saved:
+            game = json.load(saved)
+        if not game.get("plays"):
+            continue
+        day = start_time(event).date()
+        answers = {TEAM_LIST: ESPN_TEAM_LIST,
+                   f"{ESPN}/scoreboard?dates={day:%Y%m%d}": {"events": [event]},
+                   f"{ESPN}/summary?event={event['id']}": game}
+        games.append((event, game, day, answers))
+    return games
+
+
 @unittest.skipUnless(os.path.exists(f"{SEASON_CACHE}/schedule.json"),
                      f"no cached 2025-26 season in {SEASON_CACHE}")
 class SeasonReplayTest(unittest.TestCase):
     def test_no_blowout_losses_reads_stay_away_in_25_of_the_82_games(self):
-        with open(f"{SEASON_CACHE}/schedule.json") as saved:
-            schedule = json.load(saved)
-        completed = [event for event in schedule["events"]
-                     if event["competitions"][0]["status"]["type"]["state"] == "post"]
-        stay_away, played = 0, 0
-        for event in completed:
-            with open(f"{SEASON_CACHE}/{event['id']}.json") as saved:
-                game = json.load(saved)
-            if not game.get("plays"):
+        games = cached_season()
+        verdicts = [judge(["DAL"], day, answers.__getitem__, NO_BLOWOUT_LOSSES)[0]["verdict"]
+                    for _, _, day, answers in games]
+        self.assertEqual(len(games), 82)
+        self.assertEqual(verdicts.count("Stay away"), 25)
+
+    def test_close_games_marks_51_of_the_82_games_close(self):
+        games = cached_season()
+        verdicts = [judge(["DAL"], day, answers.__getitem__, CLOSE_GAMES)[0]["verdict"]
+                    for _, _, day, answers in games]
+        self.assertEqual(len(games), 82)
+        self.assertEqual(verdicts.count("Watch"), 51)
+
+    def test_close_games_watches_every_game_decided_by_5_or_fewer(self):
+        missed = []
+        for event, game, day, answers in cached_season():
+            if game_final_margin(game) > 5:
                 continue
-            played += 1
-            day = start_time(event).date()
-            responses = {
-                TEAM_LIST: ESPN_TEAM_LIST,
-                f"{ESPN}/scoreboard?dates={day:%Y%m%d}": {"events": [event]},
-                f"{ESPN}/summary?event={event['id']}": game,
-            }
-            row = judge(["DAL"], day, responses.__getitem__, NO_BLOWOUT_LOSSES)[0]
-            if row["verdict"] == "Stay away":
-                stay_away += 1
-        self.assertEqual(played, 82)
-        self.assertEqual(stay_away, 25)
+            if judge(["DAL"], day, answers.__getitem__, CLOSE_GAMES)[0]["verdict"] != "Watch":
+                missed.append(event["id"])
+        self.assertEqual(missed, [])
 
     def test_a_full_game_replay_matches_espn_for_points_made_shots_and_free_throws(self):
         with open(f"{SEASON_CACHE}/schedule.json") as saved:

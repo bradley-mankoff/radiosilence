@@ -49,6 +49,10 @@ def started_game(events, abbreviation):
     return None
 
 
+# Seconds played by the end of the 4th quarter; overtime counts on from there.
+REGULATION = 48 * 60
+
+
 def seconds_left(clock):
     """ESPN shows '6:00' above one minute and '45.2' below it."""
     minutes, _, seconds = clock.rpartition(":")
@@ -61,7 +65,7 @@ def elapsed(play):
     left = seconds_left(play["clock"]["displayValue"])
     if period <= 4:
         return (period - 1) * 720 + 720 - left
-    return 2880 + (period - 5) * 300 + 300 - left
+    return REGULATION + (period - 5) * 300 + 300 - left
 
 
 def readings(summary):
@@ -114,7 +118,35 @@ def no_blowout_losses(summary, abbreviation, fan):
     return result
 
 
-PRESET_RESULTS = {"wins": wins_for_my_team, "blow": no_blowout_losses}
+def game_margins(summary):
+    """(seconds played, home lead) after each play that carries a score, in game time, from 0-0 at tip-off."""
+    scored = [play for play in summary.get("plays", []) if "homeScore" in play and "awayScore" in play]
+    moments = [(0, 0)] + [(elapsed(play), int(play["homeScore"]) - int(play["awayScore"]))
+                          for play in scored]
+    return sorted(moments, key=lambda moment: moment[0])
+
+
+def close_games(summary, abbreviation, fan):
+    """Over the whole game: a Close ending, or Close along the way for over the share setting."""
+    moments = game_margins(summary)
+    last_score_at = moments[-1][0]
+    if last_score_at <= 0:  # no play has scored yet, so there is no time to share
+        return NOT_YET
+    points, minutes = fan.value("close_points"), fan.value("close_minutes")
+    along_points, along_share = fan.value("along_points"), fan.value("along_share") / 100
+    seconds_close_along_the_way = sum(
+        later - earlier for (earlier, lead), (later, _) in zip(moments, moments[1:])
+        if abs(lead) <= along_points)
+    close_along_the_way = seconds_close_along_the_way / last_score_at > along_share
+    window_start = REGULATION - minutes * 60
+    if last_score_at < window_start:  # before the last-minutes window only Close along the way decides
+        return FITS if close_along_the_way else DOESNT_FIT
+    close_ending = last_score_at > REGULATION or any(  # any overtime counts
+        abs(lead) <= points and window_start <= moment <= REGULATION for moment, lead in moments)
+    return FITS if close_ending or close_along_the_way else DOESNT_FIT
+
+
+PRESET_RESULTS = {"wins": wins_for_my_team, "blow": no_blowout_losses, "close": close_games}
 
 
 def combine(results, join):

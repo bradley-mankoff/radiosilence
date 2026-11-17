@@ -22,7 +22,14 @@ BLOW = Preset("blow", "No blowout losses", (
     Slider("blow_upper", "Stay away above", 98, 90, 99, "%"),
     Slider("blow_lower", "Back to Watch below", 95, 85, 98, "%"),
 ))
-SHIPPED = (WINS, BLOW)
+# Close games' last-minutes window runs inside the 4th, so its length stops at the quarter's 12 minutes.
+CLOSE = Preset("close", "Close games", (
+    Slider("close_points", "Close ending within", 5, 1, 20, "points"),
+    Slider("close_minutes", "Close ending in the last", 5, 1, 12, "minutes"),
+    Slider("along_points", "Close along the way within", 9, 1, 20, "points"),
+    Slider("along_share", "Close along the way for over", 66, 1, 99, "%"),
+))
+SHIPPED = (WINS, BLOW, CLOSE)
 
 # The timing sliders the Presets that judge between two moments share, in seconds played in regulation:
 # Judge from runs from tip-off to the start of the 4th; Freeze at runs over the 4th.
