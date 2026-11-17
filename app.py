@@ -1,15 +1,16 @@
 """RadioSilence: tells a fan, without spoilers, whether each followed NBA team's game is worth watching
 from behind.
 
-The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
-judging.py works out each team's row from ESPN's public JSON and the fan's settings; players.py judges each
-Tracked player's night from the same saved game and the player's usual minutes; catchup.py rebuilds the
-score, box score and plays as of the moment the fan names; highlights.py finds each started game's
-highlight reel without giving away its title, thumbnail or length; page.py turns the rows into the list and
-the catch-up answer into the catch-up screen; and this file serves them all, sharing ESPN answers for a
-short while. Only the catch-up answer and screen carry a score, clock or quarter, and only for the plays
-at or before the moment the fan names: every other answer holds no score, clock, quarter, win-probability
-percentage, or a started game's tip-off time.
+The phone names its teams, its tracked players and its Presets with each request, and the server keeps no
+per-fan state. judging.py works out each team's row from ESPN's public JSON and the fan's settings;
+players.py judges each tracked player's night from the same saved game and the player's usual minutes, and
+serves this season's rosters at /players for setup's search; catchup.py rebuilds the score, box score and
+plays as of the moment the fan names; highlights.py finds each started game's highlight reel without
+giving away its title, thumbnail or length; page.py turns the rows into the list and the catch-up answer
+into the catch-up screen; and this file serves them all, sharing ESPN answers for a short while. Only the
+catch-up answer and screen carry a score, clock or quarter, and only for the plays at or before the moment
+the fan names: every other answer holds no score, clock, quarter, win-probability percentage, or a started
+game's tip-off time.
 """
 
 import json
@@ -38,9 +39,9 @@ STATIC_DIR = Path(__file__).resolve().with_name("static")
 
 
 def lifetime_for(url):
-    """How long an ESPN answer is reused: a game's JSON for a cycle, the team list or a player's usual
-    minutes for a day."""
-    return TEAM_LIST_SECONDS if url == TEAM_LIST or players.is_average_url(url) else CACHE_SECONDS
+    """How long an ESPN answer is reused: a game's JSON for a cycle, and the team list or the answers about
+    players for a day."""
+    return TEAM_LIST_SECONDS if url == TEAM_LIST or players.lasts_a_day(url) else CACHE_SECONDS
 
 
 # One kept ESPN answer: when it was fetched, how long it lasts, and the JSON it holds.
@@ -123,9 +124,11 @@ def named_teams(values):
     return list(dict.fromkeys(name.strip().upper() for name in names if name.strip()))
 
 
-def teams_and_fan(params):
-    """The team names and the fan's Preset settings a request's `params` name."""
-    return named_teams(params.get("teams", [])), presets.from_query(params)
+def picks_from_query(params):
+    """The fan's picks and settings a request's `params` name: its teams, its Presets, and each tracked
+    player with his own checks."""
+    return page.Picks(named_teams(params.get("teams", [])), presets.from_query(params),
+                      players.following_from_query(params))
 
 
 class NoGame(Exception):
@@ -174,19 +177,21 @@ def picked_moment(params):
     return moment
 
 
-def catchup_page(team, params, names, fan, now, get):
+def catchup_page(team, params, picks, now, get):
     """The catch-up screen for `team`'s game, at the moment the request's pickers name and on the tab it
     asks for, or the words for why the team has no game to show and the way back to the list."""
-    teams = names or [team]
+    # Back returns to the list as the request named it; a fan who follows only players has no team card to
+    # return to, so the team whose game it is must not be added to their picks.
+    picks = picks._replace(teams=picks.teams or ([] if picks.following else [team]))
     moment = picked_moment(params)
     tab = page.catchup_tab(params.get("tab", [""])[0])
     try:
         game_id, summary = game_id_and_summary([team], now, get)
     except NoGame as error:
-        return page.catchup_notice(teams, fan, str(error))
+        return page.catchup_notice(picks, str(error))
     except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
-        return page.catchup_notice(teams, fan, espn_outage(error))
-    return page.catchup_screen(team, teams, fan, game_id, catch_up(summary, *moment), moment, tab)
+        return page.catchup_notice(picks, espn_outage(error))
+    return page.catchup_screen(team, picks, game_id, catch_up(summary, *moment), moment, tab)
 
 
 def highlight_buttons(now, reels=None):
@@ -200,24 +205,38 @@ def highlight_buttons(now, reels=None):
     return lambda event: reels.button(highlights.game_of(event), now)
 
 
+def judged_rows(picks, now, get, reels=None):
+    """One row per named team and tracked player on `now`'s Game day, each judged with the fan's settings.
+
+    The teams come first, then the players, and a request that names no team spares the team list a request
+    of its own.
+    """
+    buttons = highlight_buttons(now, reels)
+    rows = []
+    if picks.teams:
+        rows += judge(picks.teams, now.date(), get, picks.fan, buttons)
+    rows += players.judge(picks.following, now.date(), get, buttons)
+    return rows
+
+
 def root_page(query, now, get, reels=None):
-    """The page at `/` for `query`: team setup, the list of cards for the teams it names, or the catch-up
-    screen of the team it names."""
+    """The page at `/` for `query`: setup, the list of cards for the teams and players it names, or the
+    catch-up screen of the team it names."""
     params = parse_qs(query)
-    names, fan = teams_and_fan(params)
+    picks = picks_from_query(params)
     catchup_team = params.get("catchup", [""])[0].strip().upper()
     if catchup_team:
-        return catchup_page(catchup_team, params, names, fan, now, get)
-    showing_setup = "setup" in params or not names
+        return catchup_page(catchup_team, params, picks, now, get)
+    showing_setup = "setup" in params or not (picks.teams or picks.following)
     try:
         if showing_setup:
-            return page.setup_screen(sorted(espn_abbreviations(get)), names, fan)
-        return page.list_screen(judge(names, now.date(), get, fan, highlight_buttons(now, reels)), fan)
+            return page.setup_screen(sorted(espn_abbreviations(get)), picks)
+        return page.list_screen(judged_rows(picks, now, get, reels), picks)
     except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
         outage = espn_outage(error)
         if showing_setup:
-            return page.setup_screen([], names, fan, outage)
-        return page.list_screen([row(name) for name in names], fan, outage)
+            return page.setup_screen([], picks, notice_text=outage)
+        return page.list_screen([row(name) for name in picks.teams], picks, notice_text=outage)
 
 
 def catchup_answer(params, now, get):
@@ -251,16 +270,16 @@ def respond(path, now, get, reels=None):
     url = urlsplit(path)
     if url.path == "/presets":
         return json_answer(200, presets.definitions())
+    if url.path == "/players":
+        try:
+            return json_answer(200, players.served(get))
+        except ESPN_UNREACHABLE as error:
+            return json_answer(503, {"error": espn_outage(error)})
     if url.path == "/rows":
         params = parse_qs(url.query)
-        names, fan = teams_and_fan(params)
-        tracked = players.tracked_players(params)
-        checks = players.checks_from_query(params)
+        picks = picks_from_query(params)
         try:
-            rows = []
-            if names:  # no team named spares the team list a request of its own
-                rows += judge(names, now.date(), get, fan, highlight_buttons(now, reels))
-            rows += players.judge(tracked, now.date(), get, checks)
+            rows = judged_rows(picks, now, get, reels)
         except ESPN_UNREACHABLE as error:
             return json_answer(503, {"error": espn_outage(error)})
         return json_answer(200, {"rows": rows})

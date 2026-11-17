@@ -1,8 +1,8 @@
 # RadioSilence
 
-Tells a fan, without spoilers, whether each followed NBA team's game is worth watching from behind.
+Tells a fan, without spoilers, whether each followed NBA team's game or tracked player's night is worth watching from behind.
 
-Open the page and pick any number of the 30 NBA teams. The phone remembers the picks, and the main screen shows one card per team with only a coloured dot for the Verdict:
+Open the page and pick any number of the 30 NBA teams and, if you like, players by typing part of a name. The phone remembers the picks, and the main screen shows one card per team and player with only a coloured dot for the Verdict:
 
 - **Watch** (green): your Presets fit the game: any one of them when they are combined with OR, or
   all of them with AND.
@@ -18,7 +18,14 @@ points, 6:00 left in the 2nd). Your edits overwrite the shipped values on the ph
 them back, and setup warns you when every Preset you picked judges only the final: then the time a Watch
 appears, or doesn't, can hint at overtime if you remember the tip-off.
 
-A team with no started game shows its next game's day, time and opponent instead. Tap a card to open the rules applied to it: your Presets with their values, and the AND or OR. The page refreshes itself every minute, and says plainly when ESPN cannot be reached. A finished game keeps its Verdict until midnight.
+Tracking a player adds his card to the same list, with his own settings: set numbers to reach for
+points, rebounds, assists, threes made, steals and blocks, tick double-double or triple-double, and choose
+Any one fits or All must fit from a small toggle beside his name. Each tracked player keeps his own
+targets, ticks and AND or OR, so two players can aim at different nights. During the game a player is
+Watch when on track by the share of his usual minutes already played; after the final only the numbers
+actually reached count. A player who did not play stays silent on the list.
+
+A team with no started game shows its next game's day, time and opponent instead. Tap a card to open the rules applied to it: your Presets with their values and the AND or OR, or a tracked player's own numbers, ticks and AND or OR. The page refreshes itself every minute, and says plainly when ESPN cannot be reached. A finished game keeps its Verdict until midnight.
 
 The Mac computes the Verdicts and the page contains only them: no score, clock, quarter or win-probability percentage. Each card whose game has tipped off also carries a highlights button: it reads **No highlights yet** and is disabled until 3 hours 30 minutes after the scheduled tip-off and until a reel is found, then **End Highlights** opens YouTube at the NBA's ending video, or at the last two minutes of its full-game reel. The page never carries a video's title, thumbnail or length. The catch-up view opens from a card's **I'm watching** button.
 

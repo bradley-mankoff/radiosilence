@@ -19,7 +19,7 @@ import players
 from app import CACHE_SECONDS, Cached, HTML_TYPE, JSON_TYPE, respond
 from catchup import LINE, catch_up
 from judging import ESPN, judge, start_time
-from players import Checks, DID_NOT_PLAY, TrackedPlayer, player_verdict
+from players import Checks, Followed, TrackedPlayer, player_verdict
 from presets import Settings
 
 GAME_DAY = date(2026, 10, 23)
@@ -476,6 +476,37 @@ def player_responses(game, overview, seasons=None):
     if seasons is not None:
         responses[PLAYER_STATS] = seasons
     return responses
+
+
+def two_players_game(points=12, minutes=20):
+    """A Dallas-Boston game in which Luka Doncic and Jayson Tatum each have `points`, an even number, by
+    `minutes`."""
+    game = tracked_game(points=points, minutes=minutes)
+    period, clock = clock_at(minutes)
+    for index in range(points // 2):
+        game["plays"].insert(-1, game_play(f"tatum{index}", period, clock, BOS_ID, "Jump Shot",
+                                           "Jayson Tatum makes 18-foot jump shot", "+2 Points",
+                                           ("b1",), scoring=True, score=2, shooting=True))
+    return game
+
+
+def two_players_responses(game):
+    """ESPN's saved answers for a game both Luka Doncic and Jayson Tatum play, each with usual minutes."""
+    responses = player_responses(game, athlete_overview(games=12, minutes=36.0))
+    responses[f"{ATHLETE_API}/b1/overview"] = athlete_overview(games=12, minutes=36.0)
+    return responses
+
+
+DAL_ROSTER = f"{ESPN}/teams/dal/roster"
+BOS_ROSTER = f"{ESPN}/teams/bos/roster"
+
+
+def team_roster(team, players):
+    """ESPN's roster for one team, each player an (ESPN id, full name) pair."""
+    abbreviation, name = team
+    return {"team": {"abbreviation": abbreviation, "displayName": name},
+            "athletes": [{"id": player_id, "fullName": full_name}
+                         for player_id, full_name in players]}
 
 
 class JudgingTest(unittest.TestCase):
@@ -1295,11 +1326,10 @@ class TrackedPlayerTest(unittest.TestCase):
         verdict, _ = player_verdict(game, "d6", Checks(targets={"points": 10}), 20.0)
         self.assertEqual(verdict, "Too early to call")
 
-    def test_a_player_who_did_not_play_reads_did_not_play(self):
+    def test_a_player_who_did_not_play_has_no_verdict_and_no_note(self):
         verdict, detail = player_verdict(did_not_play_game(), "d6",
                                          Checks(targets={"points": 10}), 20.0)
-        self.assertIsNone(verdict)
-        self.assertEqual(detail, DID_NOT_PLAY)
+        self.assertEqual((verdict, detail), (None, None))
 
     def test_a_player_with_five_games_this_season_uses_this_seasons_minutes(self):
         # 8 points in 10 minutes project to 8 over this season's 10 and 24 over last season's 30.
@@ -1307,8 +1337,8 @@ class TrackedPlayerTest(unittest.TestCase):
             tracked_game(points=8, minutes=10),
             athlete_overview(games=5, minutes=10.0),
             athlete_seasons((2027, 5, 10.0), (2026, 60, 30.0)))
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(responses), Checks(targets={"points": 20}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 20}))], GAME_DAY, espn(responses))[0]
         self.assertEqual(row["verdict"], "Stay away")
 
     def test_a_player_under_five_games_this_season_uses_last_seasons_minutes(self):
@@ -1317,8 +1347,8 @@ class TrackedPlayerTest(unittest.TestCase):
             tracked_game(points=8, minutes=10),
             athlete_overview(games=4, minutes=12.0),
             athlete_seasons((2027, 4, 12.0), (2026, 60, 30.0)))
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(responses), Checks(targets={"points": 20}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 20}))], GAME_DAY, espn(responses))[0]
         self.assertEqual(row["verdict"], "Watch")
 
     def test_a_player_with_no_games_this_season_uses_last_seasons_minutes(self):
@@ -1328,8 +1358,8 @@ class TrackedPlayerTest(unittest.TestCase):
             tracked_game(points=10, minutes=10),
             athlete_overview_without_a_season(),
             athlete_seasons((2025, 60, 25.0), (2026, 60, 30.0)))
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(responses), Checks(targets={"points": 27}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 27}))], GAME_DAY, espn(responses))[0]
         self.assertEqual(row["verdict"], "Watch")
 
     def test_a_stats_answer_without_an_averages_category_uses_this_seasons_minutes(self):
@@ -1338,8 +1368,8 @@ class TrackedPlayerTest(unittest.TestCase):
             tracked_game(points=8, minutes=10),
             athlete_overview(games=4, minutes=12.0),
             {"categories": [{"name": "totals", "labels": ["GP"], "statistics": []}]})
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(responses), Checks(targets={"points": 20}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 20}))], GAME_DAY, espn(responses))[0]
         self.assertEqual(row["verdict"], "Stay away")
 
     def test_one_players_unreachable_athlete_answer_leaves_the_other_rows_judged(self):
@@ -1348,36 +1378,48 @@ class TrackedPlayerTest(unittest.TestCase):
         responses = player_responses(tracked_game(points=22, minutes=20),
                                      athlete_overview(games=12, minutes=36.0))
         responses[f"{ATHLETE_API}/b1/overview"] = athlete_overview(games=12, minutes=36.0)
-        status, content_type, body = respond(f"/rows?players={tracked}&player_points=20", NOW,
-                                            unreachable_for(responses, PLAYER_OVERVIEW))
+        status, content_type, body = respond(f"/rows?players={tracked}"
+                                             "&player_d1_points=20&player_b1_points=20", NOW,
+                                             unreachable_for(responses, PLAYER_OVERVIEW))
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["rows"], [
-            {"team": "DAL", "player": TRACKED_NAME, "verdict": None,
+            {"team": "DAL", "player": TRACKED_NAME, "id": "d1", "verdict": None,
              "detail": "Couldn't reach ESPN.", "next_game": None},
-            {"team": "BOS", "player": "Jayson Tatum", "verdict": "Stay away",
-             "detail": "This one looks out of reach.", "next_game": None},
+            {"team": "BOS", "player": "Jayson Tatum", "id": "b1", "verdict": "Stay away",
+             "detail": "This one looks out of reach.", "next_game": None,
+             "highlights": WAITING},
         ])
 
-    def test_each_of_several_tracked_players_gets_a_row_judged_by_the_same_checks(self):
-        # Luka's 22 points reach the target; Jayson Tatum has no play in this game, so the same target
-        # leaves his row short while Luka's reads Watch.
-        tracked = [TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
-                   TrackedPlayer("b1", "BOS", "Jayson Tatum")]
+    def test_each_of_several_tracked_players_gets_a_row_judged_by_the_checks_given_for_him(self):
+        # Luka's 22 points reach the target; Jayson Tatum has no play in this game, so the target given
+        # for him leaves his row short while Luka's reads Watch.
+        following = [Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                              Checks(targets={"points": 20})),
+                     Followed(TrackedPlayer("b1", "BOS", "Jayson Tatum"),
+                              Checks(targets={"points": 20}))]
         responses = player_responses(tracked_game(points=22, minutes=20),
                                      athlete_overview(games=12, minutes=36.0))
         responses[f"{ATHLETE_API}/b1/overview"] = athlete_overview(games=12, minutes=36.0)
-        rows = players.judge(tracked, GAME_DAY, espn(responses), Checks(targets={"points": 20}))
+        rows = players.judge(following, GAME_DAY, espn(responses))
         self.assertEqual([(row["player"], row["verdict"]) for row in rows],
                          [(TRACKED_NAME, "Watch"), ("Jayson Tatum", "Stay away")])
 
+    def test_a_player_who_did_not_play_sends_no_verdict_or_note(self):
+        responses = player_responses(did_not_play_game(), athlete_overview(games=12, minutes=36.0))
+        responses[f"{ATHLETE_API}/d6/overview"] = athlete_overview(games=12, minutes=36.0)
+        status, _, body = respond("/rows?players=d6:DAL:Naji%20Marshall&player_d6_points=10",
+                                  NOW, espn(responses))
+        row = json.loads(body)["rows"][0]
+        self.assertEqual((status, row["verdict"], row["detail"]), (200, None, None))
+
     def test_a_player_row_names_the_player(self):
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(night()), Checks(targets={"points": 20}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 20}))], GAME_DAY, espn(night()))[0]
         self.assertEqual(row["player"], TRACKED_NAME)
 
     def test_a_tracked_players_row_shows_their_teams_next_game(self):
-        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
-                            espn(night()), Checks(targets={"points": 20}))[0]
+        row = players.judge([Followed(TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                                     Checks(targets={"points": 20}))], GAME_DAY, espn(night()))[0]
         self.assertEqual(row["next_game"], {"day": "Today", "time": "7:30 PM",
                                              "opponent": "Houston Rockets", "home": True})
 
@@ -1387,12 +1429,46 @@ class TrackedPlayerTest(unittest.TestCase):
         game["header"]["competitions"][0]["competitors"][1]["score"] = "105"
         game["winprobability"] = [{"playId": "shot0", "homeWinPercentage": 0.9876}]
         responses = player_responses(game, athlete_overview(games=12, minutes=36.0))
-        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic&player_points=20",
+        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic&player_d1_points=20",
                                   NOW, espn(responses))
         self.assertEqual(status, 200)
         self.assertIn("Luka Doncic", body.decode())
         for spoiler in ["112", "105", "0.9876", "2:00", "1st", "2nd", "22", "%", "overtime"]:
             self.assertNotIn(spoiler, body.decode(), spoiler)
+
+    def test_two_players_with_different_targets_judge_differently(self):
+        # Each has 12 points in 20 minutes, which projects to 21.6 over his usual 36: Luka reaches the 20
+        # he asks for, while Tatum's own 30 is beyond him.
+        responses = two_players_responses(two_players_game(points=12, minutes=20))
+        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+                                  "&player_d1_points=20&player_b1_points=30", NOW, espn(responses))
+        self.assertEqual(status, 200)
+        self.assertEqual([(row["player"], row["verdict"]) for row in json.loads(body)["rows"]],
+                         [(TRACKED_NAME, "Watch"), ("Jayson Tatum", "Stay away")])
+
+    def test_each_tracked_players_checks_combine_with_his_own_and_or(self):
+        # Each has the same 12 points in 20 minutes; each asks for 20 points and 10 rebounds. Luka's OR
+        # takes the points his projection is on track for, while Tatum's AND needs the rebounds his 0
+        # cannot supply.
+        responses = two_players_responses(two_players_game(points=12, minutes=20))
+        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+                                  "&player_d1_points=20&player_d1_rebounds=10&player_d1_join=OR"
+                                  "&player_b1_points=20&player_b1_rebounds=10&player_b1_join=AND",
+                                  NOW, espn(responses))
+        self.assertEqual(status, 200)
+        self.assertEqual([(row["player"], row["verdict"]) for row in json.loads(body)["rows"]],
+                         [(TRACKED_NAME, "Watch"), ("Jayson Tatum", "Stay away")])
+
+    def test_a_tracked_players_double_double_tick_is_his_own(self):
+        # Each has the same 12 points in 20 minutes. Luka asks only for a double-double, which 12 points
+        # alone does not reach; Tatum asks only for 20 points, which his projection reaches.
+        responses = two_players_responses(two_players_game(points=12, minutes=20))
+        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+                                  "&player_d1_double_double=1&player_b1_points=20", NOW,
+                                  espn(responses))
+        self.assertEqual(status, 200)
+        self.assertEqual([(row["player"], row["verdict"]) for row in json.loads(body)["rows"]],
+                         [(TRACKED_NAME, "Stay away"), ("Jayson Tatum", "Watch")])
 
 
 class PresetsResponseTest(unittest.TestCase):
@@ -1520,9 +1596,23 @@ def words(markup):
     return " ".join("".join(parser.parts).split())
 
 
+def page_cards(page):
+    """Every card on a list page: its attributes, each card with its own markup."""
+    return [(dict(re.findall(r'([a-z-]+)="([^"]*)"', attrs)), markup)
+            for attrs, markup
+            in re.findall(r'<article class="card"([^>]*)>(.*?)</article>', page, re.S)]
+
+
 def cards(page):
-    """The cards on a list page, by team, each as its own markup."""
-    return dict(re.findall(r'<article class="card" data-team="([^"]+)">(.*?)</article>', page, re.S))
+    """The team cards on a list page, by team, each as its own markup."""
+    return {attrs["data-team"]: markup for attrs, markup in page_cards(page)
+            if "data-player" not in attrs}
+
+
+def player_cards(page):
+    """The player cards on a list page, by player name, each as its own markup."""
+    return {attrs["data-player"]: markup for attrs, markup in page_cards(page)
+            if "data-player" in attrs}
 
 
 def summary_text(card):
@@ -1541,10 +1631,11 @@ def presets_offered(page):
             if tag == "input" and attrs.get("name") == "presets"]
 
 
-def joins_offered(page):
-    """The AND or OR choices a setup page offers, in order: (its value, whether it is checked)."""
+def joins_offered(page, name="join"):
+    """The AND or OR choices a setup page offers under `name`, in order: (its value, whether it is
+    checked)."""
     return [(attrs["value"], "checked" in attrs) for tag, attrs in tags(page)
-            if tag == "input" and attrs.get("name") == "join"]
+            if tag == "input" and attrs.get("name") == name]
 
 
 def slider_rows(page):
@@ -1567,6 +1658,42 @@ def slider_labels(markup):
 def done_button(page):
     """The button that finishes setup, as its attributes."""
     return next(attrs for tag, attrs in tags(page) if tag == "button" and attrs.get("id") == "done")
+
+
+def form_query(form):
+    """The query a browser sends for a GET `form`: every named control, with only the ticked checkboxes
+    and radios."""
+    pairs = []
+    for tag, attrs in tags(form):
+        if tag != "input" or not attrs.get("name"):
+            continue
+        if attrs.get("type") in ("checkbox", "radio") and "checked" not in attrs:
+            continue
+        pairs.append((attrs["name"], attrs.get("value", "")))
+    return urlencode(pairs)
+
+
+def page_form(page, name):
+    """The form the page names `name`, as markup."""
+    return re.search(rf'<form id="{name}".*?</form>', page, re.S).group(0)
+
+
+def setup_form(page):
+    """The setup screen's form, as markup."""
+    return page_form(page, "setup")
+
+
+def player_panel(page, player_id):
+    """The setup form's controls for the tracked player `player_id`, as markup."""
+    return re.search(rf'<section class="group" data-player-checks="{re.escape(player_id)}">(.*?)</section>',
+                     setup_form(page), re.S).group(1)
+
+
+def player_check_names(page):
+    """The names of the player-check controls the setup form on `page` offers, in the order it offers
+    them."""
+    return [attrs["name"] for tag, attrs in tags(setup_form(page))
+            if tag == "input" and (attrs.get("name") or "").startswith("player_")]
 
 
 def script(page, marker):
@@ -1607,8 +1734,8 @@ class PageTest(PageServing):
     def test_the_page_sends_a_fan_with_saved_teams_and_settings_to_their_cards(self):
         page = self.page("/")
         self.assertRegex(page, r'localStorage\.getItem\(TEAMS\)')
-        self.assertIn('location.replace("/?teams=" + encodeURIComponent(savedTeams) + settingsQuery())',
-                      page)
+        self.assertIn('location.replace("/?" + query + settingsQuery())', page)
+        self.assertIn('localStorage.getItem(PLAYERS)', page)
         self.assertIn('localStorage.getItem(SETTINGS)', page)
 
     def test_picking_teams_shows_one_card_per_team(self):
@@ -2076,11 +2203,17 @@ class PresetSetupTest(PageServing):
         self.assertIn("Any one fits (OR)", words(setup))
         self.assertIn("All must fit (AND)", words(setup))
 
+    def test_the_presets_keep_their_combine_with_heading_beside_their_join(self):
+        form = setup_form(self.page("/?setup=1&presets=blow"))
+        self.assertLess(form.index("<h2>Combine with</h2>"), form.index('name="join"'))
+
     def test_each_slider_shows_its_shipped_value_and_range(self):
         rows = slider_rows(self.page("/?setup=1"))
         inputs = {parameter: slider_input(markup) for parameter, (markup, _) in rows.items()}
         self.assertEqual({parameter: (attrs["min"], attrs["max"], attrs["value"])
-                          for parameter, attrs in inputs.items() if parameter not in ("judge_from", "freeze_at")},
+                          for parameter, attrs in inputs.items()
+                          if parameter not in ("judge_from", "freeze_at")
+                          and not parameter.startswith("player_")},
                          {"blow_upper": ("90", "99", "98"), "blow_lower": ("85", "98", "95"),
                           "close_points": ("1", "20", "5"), "close_minutes": ("1", "12", "5"),
                           "along_points": ("1", "20", "9"), "along_share": ("1", "99", "66"),
@@ -2147,11 +2280,11 @@ class PresetSetupTest(PageServing):
         self.assertIn("Close ending within 4 points", rows["close_points"][1])
 
     def test_the_setup_form_sends_the_teams_presets_join_and_every_slider(self):
-        setup = self.page("/?setup=1")
-        form = re.search(r'<form id="setup".*?</form>', setup, re.S).group(0)
+        form = setup_form(self.page("/?setup=1"))
+        # The one control with no name is the player search box, which the page's script reads, not the form.
         self.assertEqual(collections.Counter(attrs.get("name") for tag, attrs in tags(form)
                                              if tag == "input"),
-                         collections.Counter({"teams": len(NBA_TEAMS), "presets": 4, "join": 2,
+                         collections.Counter({None: 1, "teams": len(NBA_TEAMS), "presets": 4, "join": 2,
                                               "blow_upper": 1, "blow_lower": 1, "close_points": 1,
                                               "close_minutes": 1, "along_points": 1, "along_share": 1,
                                               "high_total": 1, "judge_from": 1, "freeze_at": 1}))
@@ -2188,14 +2321,15 @@ class PresetSetupTest(PageServing):
 
     def test_the_page_keeps_the_settings_a_request_names_on_the_phone(self):
         remembered = script(self.page("/?teams=BOS&presets=blow&join=AND&blow_upper=97"), "function settingsQuery")
-        self.assertIn('if (params.has("presets") || params.has("join")) store(named(params));', remembered)
+        self.assertIn('const settingsNamed = params.has("presets") || params.has("join")'
+                      ' || params.has("players")', remembered)
+        self.assertIn('if (settingsNamed) store(named(params));', remembered)
 
-    def test_the_settings_the_page_saves_are_the_presets_the_join_and_every_slider(self):
+    def test_the_settings_the_page_saves_are_the_presets_the_join_and_every_value(self):
         controls = self.controls()
         self.assertIn("presets: chips.filter(chip => chip.checked).map(chip => chip.value),", controls)
         self.assertIn('join: form.querySelector(\'input[name="join"]:checked\').value,', controls)
-        self.assertIn("values: Object.fromEntries(sliders.map(slider => [slider.name, Number(slider.value)])),",
-                      controls)
+        self.assertIn("values[field.name] = field.value;", controls)
 
     def test_the_page_saves_the_settings_the_fan_sets_on_the_phone(self):
         controls = self.controls()
@@ -2216,14 +2350,14 @@ class PresetSetupTest(PageServing):
         controls = self.controls()
         self.assertIn("group.hidden = !picked.includes(group.dataset.preset);", controls)
 
-    def test_done_needs_a_preset_as_the_fan_picks_and_unpicks(self):
+    def test_done_needs_a_preset_or_a_player_as_the_fan_picks_and_unpicks(self):
         controls = self.controls()
-        self.assertIn("done.disabled = picked.length === 0;", controls)
+        self.assertIn("done.disabled = picked.length === 0 && chosen.players.length === 0;", controls)
 
-    def test_the_overtime_warning_follows_the_presets_the_fan_picks(self):
+    def test_the_overtime_warning_follows_the_presets_and_player_checks_the_fan_picks(self):
         controls = self.controls()
-        self.assertIn("warning.hidden = !(picked.length && picked.every(key => finalOnly.has(key)));",
-                      controls)
+        self.assertIn("warning.hidden = !(picked.length && picked.every(key => finalOnly.has(key)) "
+                      "&& !playerChecks());", controls)
 
     def test_tapping_a_card_lists_the_presets_the_and_or_and_the_values_applied(self):
         card = cards(self.page("/?teams=BOS&presets=blow,close&join=AND"
@@ -2246,6 +2380,260 @@ class PresetSetupTest(PageServing):
         self.assertEqual(card_rules(card),
                          "Wins for my team Any one fits (OR) "
                          "Judge from 6:00 left in the 2nd · Freeze at 5:00 left in the 4th")
+
+
+class PlayerSetupTest(PageServing):
+    def test_setup_finds_players_by_typing_part_of_a_name_from_the_served_rosters(self):
+        controls = script(self.page("/?setup=1"), "player-search")
+        self.assertIn('fetch("/players")', controls)
+        self.assertIn("player.name.toLowerCase().includes(typed)", controls)
+
+    def test_setup_keeps_the_players_the_address_names_selected(self):
+        setup = self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&players=b1:BOS:Jayson%20Tatum")
+        self.assertEqual(checked(setup, "players"), ["b1:BOS:Jayson Tatum", "d1:DAL:Luka Doncic"])
+
+    def test_choosing_several_players_adds_a_card_for_each(self):
+        page = self.page("/?players=d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+                         "&player_d1_points=20&player_b1_points=20",
+                         get=espn(two_players_responses(two_players_game())))
+        self.assertEqual(sorted(player_cards(page)), ["Jayson Tatum", TRACKED_NAME])
+
+    def test_a_players_card_sits_in_the_same_list_as_the_teams(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        page = self.page("/?teams=BOS&players=d1:DAL:Luka%20Doncic&player_d1_points=20&presets=blow",
+                         get=espn(responses))
+        self.assertIn("BOS", cards(page))
+        self.assertIn(TRACKED_NAME, player_cards(page))
+
+    def test_setup_offers_a_tracked_players_own_target_slider_for_each_counting_stat(self):
+        rows = slider_rows(self.page("/?setup=1&players=d1:DAL:Luka%20Doncic"))
+        inputs = {parameter: slider_input(markup) for parameter, (markup, _) in rows.items()
+                  if parameter.startswith("player_d1_")}
+        self.assertEqual({parameter: (attrs["min"], attrs["max"], attrs["value"])
+                          for parameter, attrs in inputs.items()},
+                         {"player_d1_points": ("0", "60", "0"),
+                          "player_d1_rebounds": ("0", "30", "0"),
+                          "player_d1_assists": ("0", "25", "0"),
+                          "player_d1_threes": ("0", "15", "0"),
+                          "player_d1_steals": ("0", "10", "0"),
+                          "player_d1_blocks": ("0", "10", "0")})
+        self.assertIn("Points to reach No target", rows["player_d1_points"][1])
+
+    def test_setup_shows_each_tracked_players_own_targets(self):
+        rows = slider_rows(self.page("/?setup=1&players=d1:DAL:Luka%20Doncic"
+                                     "&players=b1:BOS:Jayson%20Tatum"
+                                     "&player_d1_points=30&player_d1_rebounds=10"
+                                     "&player_b1_points=10&player_b1_rebounds=5"))
+        self.assertEqual(slider_input(rows["player_d1_points"][0])["value"], "30")
+        self.assertIn("Points to reach 30 points", rows["player_d1_points"][1])
+        self.assertEqual(slider_input(rows["player_b1_points"][0])["value"], "10")
+        self.assertIn("Points to reach 10 points", rows["player_b1_points"][1])
+        self.assertEqual((slider_input(rows["player_d1_rebounds"][0])["value"],
+                          slider_input(rows["player_b1_rebounds"][0])["value"]), ("10", "5"))
+
+    def test_setup_ticks_each_players_own_double_checks(self):
+        setup = self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&players=b1:BOS:Jayson%20Tatum"
+                          "&player_d1_double_double=1&player_b1_triple_double=1")
+        self.assertEqual((checked(setup, "player_d1_double_double"),
+                          checked(setup, "player_d1_triple_double"),
+                          checked(setup, "player_b1_double_double"),
+                          checked(setup, "player_b1_triple_double")),
+                         (["1"], [], [], ["1"]))
+
+    def test_setup_shows_each_tracked_players_own_and_or(self):
+        setup = self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&players=b1:BOS:Jayson%20Tatum"
+                          "&player_d1_join=AND&player_b1_join=OR")
+        self.assertEqual(joins_offered(setup, "player_d1_join"), [("OR", False), ("AND", True)])
+        self.assertEqual(joins_offered(setup, "player_b1_join"), [("OR", True), ("AND", False)])
+
+    def test_a_tracked_players_join_sits_beside_his_name_at_the_top_of_his_controls(self):
+        panel = player_panel(self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&player_d1_join=AND"), "d1")
+        head = re.search(r'<div class="player-head">(.*?)</div>', panel, re.S).group(1)
+        self.assertIn(TRACKED_NAME, words(head))
+        self.assertEqual(joins_offered(head, "player_d1_join"), [("OR", False), ("AND", True)])
+        self.assertNotIn("data-slider", head)
+
+    def test_a_tracked_players_join_has_no_combine_with_heading(self):
+        panel = player_panel(self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&player_d1_join=AND"), "d1")
+        self.assertNotIn("Combine with", words(panel))
+
+    def test_the_setup_form_offers_no_player_checks_while_no_player_is_tracked(self):
+        self.assertEqual(player_check_names(self.page("/?setup=1")), [])
+
+    def test_the_setup_form_offers_every_check_of_a_tracked_player(self):
+        self.assertEqual(player_check_names(self.page("/?setup=1&players=d1:DAL:Luka%20Doncic")),
+                         ["player_d1_join", "player_d1_join",
+                          "player_d1_points", "player_d1_rebounds", "player_d1_assists",
+                          "player_d1_threes", "player_d1_steals", "player_d1_blocks",
+                          "player_d1_double_double", "player_d1_triple_double"])
+
+    def test_choosing_a_player_from_the_search_adds_his_own_controls(self):
+        page = self.page("/?setup=1")
+        template = re.search(r'<template id="player-checks-template">(.*?)</template>',
+                             page, re.S).group(1)
+        self.assertEqual(sorted(attrs.get("name") for tag, attrs in tags(template)
+                                if tag == "input"),
+                         ["player___PLAYER___assists", "player___PLAYER___blocks",
+                          "player___PLAYER___double_double", "player___PLAYER___join",
+                          "player___PLAYER___join", "player___PLAYER___points",
+                          "player___PLAYER___rebounds", "player___PLAYER___steals",
+                          "player___PLAYER___threes", "player___PLAYER___triple_double"])
+        controls = script(page, "player-search")
+        self.assertIn('template.innerHTML.replaceAll("__PLAYER__", player.id)', controls)
+        self.assertIn("const panel = playerPanel(player);", controls)
+
+    def test_removing_a_tracked_player_removes_his_own_controls(self):
+        controls = script(self.page("/?setup=1"), "player-search")
+        self.assertIn("dropPanel(event.target.value);", controls)
+
+    def test_a_player_check_keeps_the_overtime_warning_away(self):
+        setup = self.page("/?setup=1&presets=wins&players=d1:DAL:Luka%20Doncic&player_d1_points=10")
+        warning = next(attrs for tag, attrs in tags(setup) if attrs.get("id") == "overtime")
+        self.assertIn("hidden", warning)
+
+    def test_a_tracked_player_with_no_checks_leaves_the_overtime_warning_on(self):
+        setup = self.page("/?setup=1&presets=wins&players=d1:DAL:Luka%20Doncic")
+        warning = next(attrs for tag, attrs in tags(setup) if attrs.get("id") == "overtime")
+        self.assertNotIn("hidden", warning)
+
+    def test_the_page_saves_picked_players_on_the_phone(self):
+        remembered = script(self.page("/?setup=1"), "localStorage.getItem(PLAYERS)")
+        self.assertIn("localStorage.setItem(PLAYERS, tracked);", remembered)
+
+    def test_the_page_sends_a_fan_with_saved_players_to_their_cards(self):
+        remembered = script(self.page("/?setup=1"), "localStorage.getItem(PLAYERS)")
+        self.assertIn('savedPlayers ? "players=" + encodeURIComponent(savedPlayers) : ""', remembered)
+        self.assertIn('location.replace("/?" + query + settingsQuery())', remembered)
+
+    def test_the_settings_sent_with_the_next_request_carry_each_players_own_checks(self):
+        remembered = script(self.page("/?setup=1"), "localStorage.getItem(PLAYERS)")
+        self.assertIn('for (const player of settings.players || []) pairs.push(["players", player]);',
+                      remembered)
+        self.assertIn('if (SLIDERS.includes(parameter) || parameter.startsWith("player_"))',
+                      remembered)
+        self.assertIn("for (const [parameter, value] of Object.entries(settings.values || {}))",
+                      remembered)
+        self.assertIn("pairs.push([parameter, value]);", remembered)
+
+    def test_the_page_saves_every_player_control_the_fan_sets(self):
+        controls = script(self.page("/?setup=1"), "player-search")
+        self.assertIn("""players: Array.from(form.querySelectorAll('input[name="players"]'))""", controls)
+        self.assertIn("if (!field.name || PICKS.includes(field.name)) continue;", controls)
+        self.assertIn("values[field.name] = field.value;", controls)
+        self.assertIn('localStorage.setItem(SETTINGS, JSON.stringify(settings()))', controls)
+
+    def test_the_settings_setup_sends_are_the_ones_the_next_request_judges_by(self):
+        # Send the setup form as a browser would: each player's own target has to reach the list's verdict,
+        # Luka's 20 reached by his projection and Tatum's 30 not.
+        get = espn(two_players_responses(two_players_game(points=12, minutes=20)))
+        setup = self.page("/?setup=1&players=d1:DAL:Luka%20Doncic&players=b1:BOS:Jayson%20Tatum"
+                          "&player_d1_points=20&player_b1_points=30", get=get)
+        page = self.page("/?" + form_query(setup_form(setup)), get=get)
+        cards_by_name = player_cards(page)
+        self.assertIn('aria-label="Watch"', cards_by_name[TRACKED_NAME])
+        self.assertIn('aria-label="Stay away"', cards_by_name["Jayson Tatum"])
+
+    def test_a_player_card_lists_his_own_checks(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        page = self.page("/?players=d1:DAL:Luka%20Doncic"
+                         "&player_d1_points=30&player_d1_rebounds=10"
+                         "&player_d1_double_double=1&player_d1_join=AND", get=espn(responses))
+        self.assertEqual(card_rules(player_cards(page)[TRACKED_NAME]),
+                         "Points to reach 30 points Rebounds to reach 10 rebounds Double-double "
+                         "All must fit (AND)")
+
+    def test_each_players_card_lists_his_own_checks(self):
+        page = self.page("/?players=d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+                         "&player_d1_points=30&player_d1_join=AND&player_b1_rebounds=10",
+                         get=espn(two_players_responses(two_players_game())))
+        self.assertEqual(card_rules(player_cards(page)[TRACKED_NAME]),
+                         "Points to reach 30 points All must fit (AND)")
+        self.assertEqual(card_rules(player_cards(page)["Jayson Tatum"]),
+                         "Rebounds to reach 10 rebounds Any one fits (OR)")
+
+    def test_a_player_card_has_a_green_dot_for_watch_with_no_verdict_word(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        card = player_cards(self.page("/?players=d1:DAL:Luka%20Doncic&player_d1_points=20",
+                                      get=espn(responses)))[TRACKED_NAME]
+        dot = next(attrs for tag, attrs in tags(card) if "dot" in (attrs.get("class") or ""))
+        self.assertEqual((dot["class"], dot["aria-label"]), ("dot watch", "Watch"))
+        self.assertNotIn("Watch", summary_text(card))
+
+    def test_a_player_card_has_the_same_highlights_button_as_a_team(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        # The player's game tipped at 5:00 AM Dallas time, so its highlights wait is over at 7:00 PM.
+        responses[SCOREBOARD] = {"events": [event("player-game", "2026-10-23T10:00Z", "in",
+                                                    (DAL, "0"), (BOS, "0"))]}
+        reel_page = playlist_page(("reel", "MAVERICKS at CELTICS | FULL GAME HIGHLIGHTS | October 23, 2026",
+                                   "15:02"))
+        card = player_cards(self.page("/?players=d1:DAL:Luka%20Doncic&player_d1_points=20",
+                                      get=espn(responses),
+                                      reels=highlight_finder(reel_page, {"reel": "NBA"})))[TRACKED_NAME]
+        link = next(attrs["href"] for tag, attrs in tags(card) if attrs.get("class") == "highlights")
+        self.assertEqual(link, "https://www.youtube.com/watch?v=reel&t=782s")
+        self.assertIn("End Highlights", words(card))
+
+    def test_a_player_card_opens_the_players_teams_catch_up_screen(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        card = player_cards(self.page("/?players=d1:DAL:Luka%20Doncic&player_d1_points=20",
+                                      get=espn(responses)))[TRACKED_NAME]
+        watch = next(attrs for tag, attrs in tags(card) if attrs.get("class") == "watching")
+        query = parse_qs(urlsplit(watch["href"]).query)
+        self.assertIn("I'm watching", words(card))
+        self.assertEqual((query["catchup"], query["players"], query["player_d1_points"]),
+                         (["DAL"], ["d1:DAL:Luka Doncic"], ["20"]))
+        self.assertNotIn("teams", query)
+
+    def test_tracking_only_a_player_does_not_follow_the_players_team(self):
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        page = self.page("/?players=d1:DAL:Luka%20Doncic&player_d1_points=20", get=espn(responses))
+        gear = next(attrs for tag, attrs in tags(page) if attrs.get("class") == "gear")
+        query = parse_qs(urlsplit(gear["href"]).query)
+        self.assertNotIn("teams", query)
+        self.assertEqual((query["players"], query["player_d1_points"]),
+                         (["d1:DAL:Luka Doncic"], ["20"]))
+
+    def test_the_back_link_from_a_players_game_keeps_each_players_checks(self):
+        page = self.page("/?catchup=DAL&teams=DAL&players=d1:DAL:Luka%20Doncic"
+                         "&player_d1_points=20&player_d1_join=AND",
+                         get=espn(screen_espn()))
+        back = next(attrs for tag, attrs in tags(page) if attrs.get("class") == "btn")
+        query = parse_qs(urlsplit(back["href"]).query)
+        self.assertEqual((query["players"], query["player_d1_points"], query["player_d1_join"]),
+                         (["d1:DAL:Luka Doncic"], ["20"], ["AND"]))
+
+    def test_the_back_link_from_a_players_game_does_not_add_the_players_team(self):
+        page = self.page("/?catchup=DAL&players=d1:DAL:Luka%20Doncic&player_d1_points=20",
+                         get=espn(screen_espn()))
+        back = next(attrs for tag, attrs in tags(page) if attrs.get("class") == "btn")
+        query = parse_qs(urlsplit(back["href"]).query)
+        self.assertNotIn("teams", query)
+        self.assertEqual(query["players"], ["d1:DAL:Luka Doncic"])
+
+    def test_the_catch_up_pickers_keep_each_players_checks(self):
+        page = self.page("/?catchup=DAL&teams=DAL&players=d1:DAL:Luka%20Doncic"
+                         "&player_d1_points=20&player_d1_double_double=1",
+                         get=espn(screen_espn()))
+        hidden = {attrs["name"]: attrs["value"] for tag, attrs in tags(page_form(page, "catchup"))
+                  if tag == "input" and attrs.get("name") in ("players", "player_d1_points",
+                                                              "player_d1_double_double")}
+        self.assertEqual(hidden, {"players": "d1:DAL:Luka Doncic", "player_d1_points": "20",
+                                  "player_d1_double_double": "1"})
+
+    def test_a_player_who_did_not_play_shows_no_verdict_or_note_on_the_list(self):
+        responses = player_responses(did_not_play_game(), athlete_overview(games=12, minutes=36.0))
+        responses[f"{ATHLETE_API}/d6/overview"] = athlete_overview(games=12, minutes=36.0)
+        card = player_cards(self.page("/?players=d6:DAL:Naji%20Marshall&player_d6_points=10",
+                                      get=espn(responses)))["Naji Marshall"]
+        dot = next(attrs for tag, attrs in tags(card) if "dot" in (attrs.get("class") or ""))
+        self.assertEqual(dot["class"], "dot none")
+        self.assertEqual(summary_text(card), "Naji Marshall")
 
 
 @unittest.skipUnless(os.path.exists(f"{SEASON_CACHE}/schedule.json"),
@@ -2327,6 +2715,23 @@ class SeasonReplayTest(unittest.TestCase):
         self.assertGreater(within / compared, 0.99)
 
 
+class PlayersAnswerTest(unittest.TestCase):
+    def test_the_players_answer_lists_this_seasons_rosters_by_name(self):
+        responses = {
+            TEAM_LIST: team_list(["DAL", "BOS"]),
+            DAL_ROSTER: team_roster(DAL, [("d1", "Luka Doncic"), ("d2", "Kyrie Irving")]),
+            BOS_ROSTER: team_roster(BOS, [("b1", "Jayson Tatum")]),
+        }
+        status, content_type, body = respond("/players", NOW, espn(responses))
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, JSON_TYPE)
+        self.assertEqual(json.loads(body), {"players": [
+            {"id": "b1", "team": "BOS", "name": "Jayson Tatum"},
+            {"id": "d2", "team": "DAL", "name": "Kyrie Irving"},
+            {"id": "d1", "team": "DAL", "name": "Luka Doncic"},
+        ]})
+
+
 class CachingTest(unittest.TestCase):
     def test_requests_for_the_same_game_within_one_cycle_cost_one_espn_fetch(self):
         fake = Counting(night())
@@ -2372,6 +2777,23 @@ class CachingTest(unittest.TestCase):
         now[0] = 24 * 60 * 60
         respond(asked, NOW, cache)
         self.assertEqual(fake.count(PLAYER_OVERVIEW), 2)
+
+    def test_the_rosters_are_fetched_once_a_day(self):
+        responses = {
+            TEAM_LIST: team_list(["DAL", "BOS"]),
+            DAL_ROSTER: team_roster(DAL, [("d1", "Luka Doncic")]),
+            BOS_ROSTER: team_roster(BOS, [("b1", "Jayson Tatum")]),
+        }
+        fake = Counting(responses)
+        now = [0]
+        cache = Cached(fake, clock=lambda: now[0])
+        respond("/players", NOW, cache)
+        now[0] = 12 * 60 * 60
+        respond("/players", NOW, cache)
+        self.assertEqual(fake.count(DAL_ROSTER), 1)
+        now[0] = 24 * 60 * 60
+        respond("/players", NOW, cache)
+        self.assertEqual(fake.count(DAL_ROSTER), 2)
 
 
 if __name__ == "__main__":

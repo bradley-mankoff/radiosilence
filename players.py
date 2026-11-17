@@ -1,18 +1,21 @@
 """Tracked players: one row per player a fan follows, judged from the saved game and their usual minutes.
 
 A fan's request names tracked players as `players=<ESPN id>:<team>:<name>`, repeated or comma-joined, and
-one set of checks for all of them. A check is a number to reach in points, rebounds, assists, threes made,
-steals or blocks (`player_points=30`, `player_rebounds=10`, ...), or a double-double or triple-double
-tick (`double_double=1`, `triple_double=1`). The checks combine with the request's `join`, AND or OR, the
-same way Presets do. Every check is fits, doesn't fit or not yet, and no row says which check fitted.
+each player's own checks. A check is a number to reach in points, rebounds, assists, threes made, steals
+or blocks (`player_<id>_points=30`, `player_<id>_rebounds=10`, ...), or a double-double or triple-double
+tick (`player_<id>_double_double=1`, `player_<id>_triple_double=1`). Each player's checks combine with his
+own `player_<id>_join`, AND or OR, the same way Presets do, so two players can aim at different nights.
+Every check is fits, doesn't fit or not yet, and no row says which check fitted.
 
 During a game each number projects as so far times the player's usual minutes divided by the minutes
 played so far, from 6 minutes played; under 6 the row is Too early to call. A number already reached is
 met for good, and on track when the projection reaches it. A double-double counts stats reaching 10 among
 points, rebounds, assists, steals and blocks, using the same projection; a triple-double needs three. After
 the final only what was reached counts, so a great projection cannot turn a short night into a Watch. A
-player who did not play — the game is final and no play names him and he has no minutes — gets a row that
-says Did not play and carries no Verdict.
+player who did not play — the game is final and no play names him and he has no minutes — gets no Verdict
+and no note, so the list never reveals the game has ended; the catch-up view is where a fan learns that.
+The setup screen finds players through available_players, which reads this season's NBA team rosters, and
+/players serves them through served.
 
 Usual minutes are ESPN's season average minutes from the athlete overview, falling back to last season's
 average when this season has fewer than 5 games. The server caches each player's answer for a day, so a
@@ -21,10 +24,11 @@ player's row and the catch-up view read the same game the same way.
 """
 
 from collections import namedtuple
+from urllib.parse import quote
 
 import judging
 from catchup import MAX_OVERTIME_MINUTES, OVERTIME, catch_up
-from presets import JOIN, JOINS
+from presets import JOIN, JOINS, Slider
 
 MINIMUM_MINUTES = 6  # a player is Too early to call until he has played this many minutes
 MINIMUM_GAMES = 5  # this season's average needs this many games; before it, last season's average
@@ -33,18 +37,42 @@ COUNTING = ("points", "rebounds", "assists", "steals", "blocks")
 # The moment past the last play of any game, so the replay counts the whole game: catch-up's overtime runs
 # to MAX_OVERTIME_MINUTES, and no game plays a second past its last minute.
 WHOLE_GAME = (OVERTIME, MAX_OVERTIME_MINUTES, 59)
-DID_NOT_PLAY = "Did not play"
 NO_CHECKS = "Pick a number to reach."
 COULDNT_REACH = "Couldn't reach ESPN."
 # ESPN's answer for one player can fail on its own: unreachable, bad JSON, or a shape this code cannot read.
 BAD_ANSWER = (OSError, ValueError, LookupError, TypeError, AttributeError)
-TARGETS = (("player_points", "points"), ("player_rebounds", "rebounds"),
-           ("player_assists", "assists"), ("player_threes", "threes_made"),
-           ("player_steals", "steals"), ("player_blocks", "blocks"))
-STATS = tuple(stat for _, stat in TARGETS)
+# One number a fan can ask a player to reach: the slider it travels as, and the box score stat it counts.
+Check = namedtuple("Check", "slider stat")
+CHECKS = (
+    Check(Slider("points", "Points to reach", 0, 0, 60, "points"), "points"),
+    Check(Slider("rebounds", "Rebounds to reach", 0, 0, 30, "rebounds"), "rebounds"),
+    Check(Slider("assists", "Assists to reach", 0, 0, 25, "assists"), "assists"),
+    Check(Slider("threes", "Threes made to reach", 0, 0, 15, "threes"), "threes_made"),
+    Check(Slider("steals", "Steals to reach", 0, 0, 10, "steals"), "steals"),
+    Check(Slider("blocks", "Blocks to reach", 0, 0, 10, "blocks"), "blocks"),
+)
+STATS = tuple(check.stat for check in CHECKS)
+SLIDER_STAT = {check.slider.parameter: check.stat for check in CHECKS}
+TARGET_SLIDERS = tuple(check.slider for check in CHECKS)
+NO_TARGET = "No target"  # a check left at zero: the fan asks this player for no number
+DOUBLE_DOUBLE_NAME = "Double-double"
+TRIPLE_DOUBLE_NAME = "Triple-double"
 ATHLETES = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes"
+ROSTER = f"{judging.ESPN}/teams"  # one team roster per NBA team, for finding a player by name
 
 TrackedPlayer = namedtuple("TrackedPlayer", "id team name")
+# One tracked player and his own checks, which travel together.
+Followed = namedtuple("Followed", "player checks")
+
+
+def player_token(player):
+    """How a request names `player`: his ESPN id, his team and his name, colon-separated."""
+    return f"{player.id}:{player.team}:{player.name}"
+
+
+def check_parameter(player_id, parameter):
+    """The query parameter one player's check travels as: his ESPN id, then the check's name."""
+    return f"player_{player_id}_{parameter}"
 
 
 def _valid_targets(targets):
@@ -63,7 +91,7 @@ def _valid_targets(targets):
 
 
 class Checks:
-    """One set of checks every tracked player is judged by: targets by stat, the two double checks, join."""
+    """One tracked player's checks: targets by stat, the two double checks, and his own AND or OR."""
 
     def __init__(self, targets=None, double_double=False, triple_double=False, join=JOIN):
         self.targets = dict(_valid_targets(targets))
@@ -73,6 +101,24 @@ class Checks:
 
     def __bool__(self):
         return bool(self.targets or self.double_double or self.triple_double)
+
+    def value(self, parameter):
+        """The target this player asks for on `parameter`'s stat, or zero when he asks for no number."""
+        stat = SLIDER_STAT.get(parameter)
+        return self.targets.get(stat, 0) if stat else 0
+
+    def query_pairs(self, player_id):
+        """The checks as the query pairs a request names them by for the player `player_id`, so a link can
+        carry them."""
+        pairs = [(check_parameter(player_id, parameter), str(self.targets[stat]))
+                 for parameter, stat in SLIDER_STAT.items() if stat in self.targets]
+        if self.double_double:
+            pairs.append((check_parameter(player_id, "double_double"), "1"))
+        if self.triple_double:
+            pairs.append((check_parameter(player_id, "triple_double"), "1"))
+        if self:
+            pairs.append((check_parameter(player_id, "join"), self.join))
+        return pairs
 
 
 def _last(params, name, default=""):
@@ -84,15 +130,19 @@ def _ticked(value):
     return str(value).strip().lower() in ("1", "true", "on", "yes")
 
 
-def checks_from_query(params):
-    """The one set of checks a request names, with the shipped OR when it names no join."""
-    targets = {stat: _last(params, parameter) for parameter, stat in TARGETS}
-    return Checks(targets, _ticked(_last(params, "double_double")),
-                  _ticked(_last(params, "triple_double")), _last(params, "join").upper())
+def checks_for(params, player_id):
+    """The checks a request's `params` give the player `player_id`, with his shipped OR when it names no
+    join."""
+    targets = {check.stat: _last(params, check_parameter(player_id, check.slider.parameter))
+               for check in CHECKS}
+    return Checks(targets,
+                  _ticked(_last(params, check_parameter(player_id, "double_double"))),
+                  _ticked(_last(params, check_parameter(player_id, "triple_double"))),
+                  _last(params, check_parameter(player_id, "join")).upper())
 
 
 def tracked_players(params):
-    """The tracked players a request names, each written `id:team:name`, in the order given."""
+    """The tracked players a request's `params` name, each written `id:team:name`, in the order given."""
     found = {}
     for value in params.get("players", []):
         for token in value.split(","):
@@ -100,6 +150,11 @@ def tracked_players(params):
             if len(fields) == 3 and all(fields):
                 found.setdefault(fields[0], TrackedPlayer(*fields))
     return list(found.values())
+
+
+def following_from_query(params):
+    """The tracked players a request's `params` name, each with his own checks, in the order given."""
+    return tuple(Followed(player, checks_for(params, player.id)) for player in tracked_players(params))
 
 
 class Projection:
@@ -141,7 +196,7 @@ class Projection:
 
 
 def _has_played(summary, player_id):
-    """Whether any saved play names the player, which a Did not play answer needs to be false."""
+    """Whether any saved play names the player, which a player who did not play needs to be false."""
     return any(athlete["athlete"]["id"] == player_id
                for play in summary.get("plays", [])
                for athlete in play.get("participants", []))
@@ -151,8 +206,8 @@ def player_verdict(summary, player_id, checks, usual_minutes):
     """Return (verdict, detail) for a tracked player in `summary`, with the player's usual minutes.
 
     The row is Too early to call under 6 minutes or before the player has entered. A final game judges by
-    what the player reached, not by a projection, and a player no play names and no minute counts reads
-    Did not play with no Verdict.
+    what the player reached, not by a projection, and a player no play names and no minute counts gets no
+    Verdict and no note, so a list built from this can never reveal that the game has ended.
     """
     if not checks:
         return None, NO_CHECKS
@@ -161,7 +216,7 @@ def player_verdict(summary, player_id, checks, usual_minutes):
     player = next((line for line in answer["players"] if line["id"] == player_id), None)
     if final and (player is None or (player["minutes"] == 0
                                      and not _has_played(summary, player_id))):
-        return None, DID_NOT_PLAY
+        return None, None
     if player is None:
         return judging.VERDICTS[judging.NOT_YET]
     if not final and player["minutes"] < MINIMUM_MINUTES:
@@ -246,34 +301,66 @@ def _usual_minutes(player_id, get, day):
     return _last_season_minutes(get(f"{ATHLETES}/{player_id}/stats"), _season_year(day)) or minutes
 
 
-def is_average_url(url):
-    """Whether `url` is one of ESPN's per-player average answers, which the server keeps for a day."""
-    return url.startswith(f"{ATHLETES}/") and (url.endswith("/overview") or url.endswith("/stats"))
+def lasts_a_day(url):
+    """Whether `url` is an ESPN answer the server keeps for a day: a team's roster, or a player's usual
+    minutes from his overview or season averages."""
+    return ((url.startswith(f"{ATHLETES}/") and (url.endswith("/overview") or url.endswith("/stats")))
+            or (url.startswith(f"{ROSTER}/") and url.endswith("/roster")))
+
+
+def roster_url(abbreviation):
+    """ESPN's roster for the team it calls `abbreviation`, listing this season's players."""
+    return f"{ROSTER}/{quote(abbreviation.lower(), safe='')}/roster"
+
+
+def available_players(get):
+    """Every player on this season's NBA rosters, by name, as the setup screen finds them."""
+    found = {}
+    for abbreviation in sorted(judging.espn_abbreviations(get)):
+        roster = get(roster_url(abbreviation))
+        for athlete in roster.get("athletes", []):
+            name = athlete.get("fullName") or athlete.get("displayName")
+            if athlete.get("id") and name:
+                found[athlete["id"]] = TrackedPlayer(athlete["id"], abbreviation, name)
+    return sorted(found.values(), key=lambda player: (player.name, player.team, player.id))
+
+
+def served(get):
+    """Every player this season's rosters list, as /players serves him: his ESPN id, his team and his
+    name."""
+    return {"players": [{"id": player.id, "team": player.team, "name": player.name}
+                        for player in available_players(get)]}
 
 
 def _player_row(player, verdict=None, detail=None, preview=None):
-    """One row of the /rows answer for a tracked player: a team's row plus the player's name."""
-    return {**judging.row(player.team, verdict, detail, preview), "player": player.name}
+    """One row of the /rows answer for a tracked player: a team's row plus the player's id and name, so
+    the page can give the row his own rules."""
+    return {**judging.row(player.team, verdict, detail, preview), "player": player.name, "id": player.id}
 
 
 def _unknown_player_row(player):
     """The row for a player whose team ESPN lists no NBA team by, made without a game request."""
-    return {**judging.unknown_row(player.team), "player": player.name}
+    return {**judging.unknown_row(player.team), "player": player.name, "id": player.id}
 
 
-def _judge_player(player, abbreviation, today, today_games, get, checks):
-    """The row for one tracked player whose team ESPN calls `abbreviation`, on the Game day `today`.
+def _judge_player(followed, abbreviation, today, today_games, get, highlights=None):
+    """The row for one tracked player whose team ESPN calls `abbreviation`, on the Game day `today`, judged
+    by his own checks.
 
     A player's own athlete answer failing — unreachable ESPN, bad JSON, or an answer this code cannot read
     — stays in his row as a note, so the other players' and teams' rows still judge.
     """
+    player, checks = followed
     try:
         game = judging.started_game(today_games, abbreviation)
         if game:
             summary = get(f"{judging.ESPN}/summary?event={game['id']}")
             game_verdict, detail = player_verdict(summary, player.id, checks,
                                                   _usual_minutes(player.id, get, today))
-            return _player_row(player, verdict=game_verdict, detail=detail)
+            line = _player_row(player, verdict=game_verdict, detail=detail)
+            if highlights is not None:
+                line["highlights"] = highlights(game)
+            return line
         preview = judging.next_game(judging.schedule_for(abbreviation, get), today, abbreviation)
         if preview is None:
             return _player_row(player, detail="No more games scheduled.")
@@ -282,22 +369,23 @@ def _judge_player(player, abbreviation, today, today_games, get, checks):
         return _player_row(player, detail=COULDNT_REACH)
 
 
-def judge(tracked, today, get, checks):
-    """One row per tracked player in `tracked` for the Game day `today`, in the order given.
+def judge(following, today, get, highlights=None):
+    """One row per tracked player in `following` for the Game day `today`, in the order given, each judged
+    by his own checks.
 
     Only a player whose team ESPN lists is judged; any other team gets its own row and no game request, so
     one bad pick cannot hide the other rows. A failed answer for one player stays in his row for the same
-    reason. A team with a started game today gets the player's Verdict, and a team without one gets the
-    Next-game preview, as a team's row does.
+    reason. A team with a started game today gets the player's Verdict and, when `highlights` is given,
+    its End Highlights button, and a team without one gets the Next-game preview, as a team's row does.
     """
-    if not tracked:
+    if not following:
         return []
     known = judging.espn_abbreviations(get)
-    abbreviations = [judging.espn_abbreviation(player.team, known) for player in tracked]
+    abbreviations = [judging.espn_abbreviation(followed.player.team, known) for followed in following]
     if not any(abbreviations):
-        return [_unknown_player_row(player) for player in tracked]
+        return [_unknown_player_row(followed.player) for followed in following]
     scoreboard = get(f"{judging.ESPN}/scoreboard?dates={today:%Y%m%d}")
     today_games = [event for event in scoreboard["events"] if judging.start_time(event).date() == today]
-    return [_judge_player(player, abbreviation, today, today_games, get, checks)
-            if abbreviation else _unknown_player_row(player)
-            for player, abbreviation in zip(tracked, abbreviations)]
+    return [_judge_player(followed, abbreviation, today, today_games, get, highlights)
+            if abbreviation else _unknown_player_row(followed.player)
+            for followed, abbreviation in zip(following, abbreviations)]

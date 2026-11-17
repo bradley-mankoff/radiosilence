@@ -1,12 +1,13 @@
-"""The RadioSilence page: setup with the fan's teams and Presets, one card per followed team, and the
-catch-up screen a card opens.
+"""The RadioSilence page: setup with the fan's teams, tracked players and their own checks, and the Presets,
+one card per followed team or player, and the catch-up screen a card opens.
 
 app.py builds this page from the same rows /rows answers with, so a list can only show what the Verdict
 needs; the catch-up screen is the one screen that shows a game's score and plays, and only those at or
-before the moment the fan names. The small scripts do what the server cannot: keep the fan's teams, Preset
-settings and each game's catch-up moment on the phone, send them back on the next visit, and show each
-slider's value as the fan moves it. The Presets, their sliders and their words all come from presets.py,
-and the catch-up periods from catchup.py, so the page and the answers read one definition.
+before the moment the fan names. The small scripts do what the server cannot: find a player in the served
+rosters, keep the fan's teams, players, settings and each game's catch-up moment on the phone, send them
+back on the next visit, and show each slider's value as the fan moves it. The Presets, their sliders and
+their words all come from presets.py, each player's checks from players.py, and the catch-up periods from
+catchup.py, so the page and the answers read one definition.
 """
 
 import json
@@ -15,16 +16,24 @@ from html import escape
 from urllib.parse import urlencode
 
 import catchup
+import players
 import presets
 
 NAME = "RadioSilence"
 TEAMS_KEY = "radiosilence.teams"
+PLAYERS_KEY = "radiosilence.players"
 SETTINGS_KEY = "radiosilence.settings"
+# The id setup's player template names its controls by until the script fills in the chosen player's id.
+NEW_PLAYER = "__PLAYER__"
 DOT_CLASSES = {"Watch": "watch", "Stay away": "stay", "Too early to call": "early"}
 JOIN_WORDS = {"OR": "Any one fits (OR)", "AND": "All must fit (AND)"}
 QUARTERS = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}
 OVERTIME_WARNING = ("Every Preset you picked judges only the final, so if you remember when the game "
                     "tipped off, the time a Watch appears, or doesn't, can hint at overtime.")
+# What one request's page carries: the fan's own team picks, the fan's Presets and slider values, and each
+# tracked player with his own checks. Every screen and every link needs all three, so they travel as one
+# value, and `teams` is only ever the fan's picks, never the team a tracked player happens to play for.
+Picks = namedtuple("Picks", "teams fan following")
 
 STYLE = """
   :root { --ink:#f2efe8; --dim:#8d8a83; --bg:#111214; --card:#1c1d21; --line:#2c2d33;
@@ -39,6 +48,10 @@ STYLE = """
   h1, h2 { font-size:1rem; text-transform:uppercase; letter-spacing:.12em; color:var(--dim);
            margin:22px 18px 8px; font-weight:600; }
   .picks { display:flex; gap:8px; flex-wrap:wrap; padding:0 18px; }
+  .search { padding:0 18px; }
+  .search input { width:100%; background:var(--card); color:var(--ink); border:1px solid var(--line);
+                  border-radius:12px; padding:12px; font:inherit; }
+  #player-results { padding:8px 0 0; }
   .pick { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:999px;
           padding:8px 14px; font-size:.95rem; cursor:pointer; }
   .pick input { position:absolute; opacity:0; pointer-events:none; }
@@ -91,6 +104,11 @@ STYLE = """
   .pbp div { padding:8px 18px; border-bottom:1px solid var(--line); font-size:.9rem; }
   .pbp b { color:var(--dim); font-weight:500; margin-right:8px; }
   .slider { padding:6px 18px 10px; }
+  .player-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+                 gap:4px 12px; margin:18px 18px 4px; }
+  .player-head h2 { margin:0; }
+  .join { display:flex; gap:6px; }
+  .join .pick { padding:4px 10px; font-size:.75rem; }
   .slider label { display:flex; justify-content:space-between; gap:12px; font-size:.9rem;
                   color:var(--dim); }
   .slider input { width:100%; accent-color:var(--early); }
@@ -99,71 +117,101 @@ STYLE = """
 """
 
 # The script every page runs before it paints: a list page keeps the picks and settings it was asked for,
-# a fan who already picked teams goes straight to their cards, and the settings go with them. Without
-# storage the page still works; it just forgets.
+# a fan who already picked teams or players goes straight to their cards, and the settings go with them.
+# Without storage the page still works; it just forgets.
 REMEMBER_PICKS = """<script>
 (function () {
-  const TEAMS = "%(teams_key)s", SETTINGS = "%(settings_key)s", SLIDERS = %(sliders)s;
+  const TEAMS = "%(teams_key)s", PLAYERS = "%(players_key)s", SETTINGS = "%(settings_key)s",
+        SLIDERS = %(sliders)s;
   function saved() {
     try { return JSON.parse(localStorage.getItem(SETTINGS)); } catch (error) { return null; }
   }
   function store(settings) {
     try { localStorage.setItem(SETTINGS, JSON.stringify(settings)); } catch (error) {}
   }
-  // The settings a query names: its Presets, its AND or OR, and a value for each slider it carries.
+  // The settings a query names: its Presets, its tracked players, the Presets' join, and a value for each
+  // slider or player check it carries.
   function named(query) {
     const picked = query.getAll("presets").join(",").split(",").filter(key => key);
+    const tracked = query.getAll("players").flatMap(value => value.split(",")).filter(token => token);
     const values = {};
-    for (const parameter of SLIDERS) if (query.has(parameter)) values[parameter] = Number(query.get(parameter));
-    return {presets: picked, join: query.get("join") === "AND" ? "AND" : "OR", values: values};
+    for (const parameter of new Set(query.keys()))
+      if (SLIDERS.includes(parameter) || parameter.startsWith("player_"))
+        values[parameter] = query.get(parameter);
+    return {presets: picked, players: tracked,
+            join: query.get("join") === "AND" ? "AND" : "OR", values: values};
   }
   // The fan's saved settings as query parameters, and nothing when the phone holds none.
   function settingsQuery() {
     const settings = saved();
     if (!settings) return "";
     const pairs = [["presets", settings.presets.join(",")], ["join", settings.join]];
-    for (const parameter of SLIDERS) {
-      if (settings.values[parameter] !== undefined) pairs.push([parameter, settings.values[parameter]]);
-    }
+    for (const player of settings.players || []) pairs.push(["players", player]);
+    for (const [parameter, value] of Object.entries(settings.values || {}))
+      pairs.push([parameter, value]);
     return "&" + pairs.map(pair => pair[0] + "=" + encodeURIComponent(pair[1])).join("&");
   }
   try {
     const params = new URLSearchParams(location.search);
     const picks = params.getAll("teams").join(",");
-    if (picks) {
+    const tracked = params.getAll("players").join(",");
+    const settingsNamed = params.has("presets") || params.has("join") || params.has("players")
+      || SLIDERS.some(parameter => params.has(parameter));
+    if (picks || tracked || settingsNamed) {
       localStorage.setItem(TEAMS, picks);
-      if (params.has("presets") || params.has("join")) store(named(params));
+      localStorage.setItem(PLAYERS, tracked);
+      if (settingsNamed) store(named(params));
       return;
     }
     if (params.has("setup")) return;
     const savedTeams = localStorage.getItem(TEAMS);
-    if (savedTeams) location.replace("/?teams=" + encodeURIComponent(savedTeams) + settingsQuery());
+    const savedPlayers = localStorage.getItem(PLAYERS);
+    const query = [savedTeams ? "teams=" + encodeURIComponent(savedTeams) : "",
+                   savedPlayers ? "players=" + encodeURIComponent(savedPlayers) : ""]
+                    .filter(part => part).join("&");
+    if (query) location.replace("/?" + query + settingsQuery());
   } catch (error) {}
 })();
-</script>""" % {"teams_key": TEAMS_KEY, "settings_key": SETTINGS_KEY,
+</script>""" % {"teams_key": TEAMS_KEY, "players_key": PLAYERS_KEY, "settings_key": SETTINGS_KEY,
                        "sliders": json.dumps([slider.parameter for slider in presets.ALL_SLIDERS])}
 
-# The setup screen's script: it shows the picked Presets' sliders, each value in words, keeps the fan's
-# settings on the phone as they change, and puts a Preset's sliders back on Reset to default.
+# The setup screen's script: it shows the picked Presets' sliders, finds a player by a part of the name and
+# gives the chosen player his own controls, shows each value in words, keeps the fan's settings on the phone
+# as they change, and puts a Preset's sliders back on Reset to default.
 CONTROLS = """<script>
 (function () {
   const form = document.getElementById("setup");
   if (!form) return;
   const SETTINGS = "%(settings_key)s";
+  // The picks and the Presets' join, which are not values: every other control the form submits is one.
+  const PICKS = ["teams", "presets", "join", "players"];
   const chips = Array.from(form.querySelectorAll('input[name="presets"]'));
-  const sliders = Array.from(form.querySelectorAll('input[type="range"]'));
   // Only a section that names a Preset hides and shows with that Preset's chip; the shared Timing
-  // sliders are always on screen.
+  // sliders are always on screen, and each tracked player's section sits with his chip.
   const groups = Array.from(form.querySelectorAll("section[data-preset]"));
   const finalOnly = new Set(chips.filter(chip => "finalOnly" in chip.dataset).map(chip => chip.value));
+  const panels = form.querySelector("#player-checks");
+  const template = document.getElementById("player-checks-template");
+  const picks = form.querySelector("#player-picks");
+  const search = form.querySelector("#player-search");
+  const results = form.querySelector("#player-results");
   const done = form.querySelector("#done");
   const warning = form.querySelector("#overtime");
+  let roster = [];
 
   function settings() {
+    const values = {};
+    for (const field of form.elements) {
+      if (!field.name || PICKS.includes(field.name)) continue;
+      if ((field.type === "checkbox" || field.type === "radio") && !field.checked) continue;
+      values[field.name] = field.value;
+    }
     return {
       presets: chips.filter(chip => chip.checked).map(chip => chip.value),
+      players: Array.from(form.querySelectorAll('input[name="players"]'))
+        .filter(pick => pick.checked).map(pick => pick.value),
       join: form.querySelector('input[name="join"]:checked').value,
-      values: Object.fromEntries(sliders.map(slider => [slider.name, Number(slider.value)])),
+      values: values,
     };
   }
   function showValue(slider) {
@@ -173,12 +221,93 @@ CONTROLS = """<script>
   function remember() {
     try { localStorage.setItem(SETTINGS, JSON.stringify(settings())); } catch (error) {}
   }
+  // A player's own checks keep the overtime warning away: a number to reach, or a double tick.
+  function playerChecks() {
+    return Array.from(form.elements).some(field => field.name && field.name.startsWith("player_")
+      && (field.type === "range" ? Number(field.value) > 0 : field.type === "checkbox" && field.checked));
+  }
   function show() {
-    const picked = settings().presets;
+    const chosen = settings();
+    const picked = chosen.presets;
     for (const group of groups) group.hidden = !picked.includes(group.dataset.preset);
-    done.disabled = picked.length === 0;
-    warning.hidden = !(picked.length && picked.every(key => finalOnly.has(key)));
+    done.disabled = picked.length === 0 && chosen.players.length === 0;
+    warning.hidden = !(picked.length && picked.every(key => finalOnly.has(key)) && !playerChecks());
     remember();
+  }
+  function playerToken(player) {
+    return player.id + ":" + player.team + ":" + player.name;
+  }
+  // A player as his chip and his panel head name him: his name and his team.
+  function playerWords(player) {
+    return player.name + " (" + player.team + ")";
+  }
+  function playerChip(player) {
+    const label = document.createElement("label");
+    label.className = "pick";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "players";
+    input.value = playerToken(player);
+    input.checked = true;
+    label.append(input, playerWords(player));
+    return label;
+  }
+  // A newly chosen player's own controls: his section of the template, named by his ESPN id, so his
+  // targets, ticks and AND or OR travel as his own parameters.
+  function playerPanel(player) {
+    if (!template) return null;
+    const holder = document.createElement("div");
+    holder.innerHTML = template.innerHTML.replaceAll("%(new_player)s", player.id);
+    const panel = holder.firstElementChild;
+    panel.querySelector("[data-player-name]").textContent = playerWords(player);
+    return panel;
+  }
+  function dropPanel(token) {
+    const id = token.split(":")[0];
+    for (const panel of panels.querySelectorAll("[data-player-checks]"))
+      if (panel.dataset.playerChecks === id) panel.remove();
+  }
+  function alreadyChosen(value) {
+    return Array.from(form.querySelectorAll('input[name="players"]'))
+      .some(pick => pick.value === value);
+  }
+  function showResults() {
+    if (!results || !search) return;
+    const typed = search.value.trim().toLowerCase();
+    results.replaceChildren();
+    if (!typed) return;
+    for (const player of roster.filter(player => player.name.toLowerCase().includes(typed)).slice(0, 10)) {
+      if (alreadyChosen(playerToken(player))) continue;
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "pick";
+      choice.textContent = playerWords(player);
+      choice.addEventListener("click", () => {
+        picks.append(playerChip(player));
+        const panel = playerPanel(player);
+        if (panel) panels.append(panel);
+        search.value = "";
+        showResults();
+        show();
+      });
+      results.append(choice);
+    }
+  }
+  if (search) {
+    search.addEventListener("input", showResults);
+    fetch("/players").then(response => response.json()).then(answer => {
+      roster = answer.players || [];
+      showResults();
+    }).catch(() => {});
+  }
+  if (picks) {
+    picks.addEventListener("change", (event) => {
+      if (event.target.name !== "players" || event.target.checked) return;
+      dropPanel(event.target.value);
+      event.target.closest("label").remove();
+      showResults();
+      show();
+    });
   }
   form.addEventListener("input", (event) => {
     if (event.target.type === "range") showValue(event.target);
@@ -193,7 +322,7 @@ CONTROLS = """<script>
     show();
   });
 })();
-</script>""" % {"settings_key": SETTINGS_KEY}
+</script>""" % {"settings_key": SETTINGS_KEY, "new_player": NEW_PLAYER}
 
 
 def settings_params(fan):
@@ -202,13 +331,22 @@ def settings_params(fan):
             + [(parameter, str(value)) for parameter, value in fan.values.items()])
 
 
-def page_href(names, fan, setup=False, catchup_team=None):
-    """The page's address for `names` and the fan's settings; `setup` asks for the setup screen, with the
-    `names` ticked, and `catchup_team` asks for that team's catch-up screen."""
+def player_params(following):
+    """The tracked players and each player's own checks as query pairs, so a link carries them the way a
+    request does."""
+    return ([("players", players.player_token(followed.player)) for followed in following]
+            + [pair for followed in following
+               for pair in followed.checks.query_pairs(followed.player.id)])
+
+
+def page_href(picks, setup=False, catchup_team=None):
+    """The page's address for `picks`; `setup` asks for the setup screen, with the fan's teams and players
+    ticked, and `catchup_team` asks for that team's catch-up screen."""
     leading = [("setup", "1")] if setup else []
     if catchup_team:
         leading.append(("catchup", catchup_team))
-    return "/?" + urlencode(leading + [("teams", name) for name in names] + settings_params(fan))
+    return "/?" + urlencode(leading + [("teams", name) for name in picks.teams]
+                             + player_params(picks.following) + settings_params(picks.fan))
 
 
 def preview_words(preview):
@@ -262,30 +400,38 @@ def moment_words(seconds):
 
 def value_words(slider, value):
     """`value` in `slider`'s unit, as the fan reads it beside the slider: '98%', '5 points', '6:00 left in
-    the 2nd'."""
+    the 2nd', or 'No target' for a check left asking for no number."""
     if slider.unit == "%":
         return f"{value}%"
     if slider.unit == presets.MOMENT:
         return moment_words(value)
+    if value == 0 and slider in players.TARGET_SLIDERS:
+        return players.NO_TARGET
     unit = slider.unit if value != 1 else slider.unit[:-1]
     return f"{value} {unit}"
 
 
-def slider_in_words(slider, fan):
-    """`slider` with the fan's value on it, as a fan reads the pair in a rules panel."""
-    return f"{slider.name} {value_words(slider, fan.value(slider.parameter))}"
+def slider_in_words(slider, settings):
+    """`slider` with the value held on it, by the fan's settings or by a tracked player's checks, as a fan
+    reads the pair in a rules panel."""
+    return f"{slider.name} {value_words(slider, settings.value(slider.parameter))}"
 
 
-def slider_row(slider, fan):
+def slider_row(slider, settings, parameter=None):
     """One slider: its words, the value the fan set, and every value it can take with the words it shows,
-    so the page's script can follow the slider as the fan moves it and put it back on Reset to default."""
-    value = fan.value(slider.parameter)
+    so the page's script can follow the slider as the fan moves it and put it back on Reset to default.
+
+    `parameter` names the control, for a player's own copy of a check whose value `settings` holds by the
+    slider's own parameter; it is that parameter when it is not given.
+    """
+    parameter = parameter or slider.parameter
+    value = settings.value(slider.parameter)
     labels = {str(number): value_words(slider, number)
               for number in range(slider.low, slider.high + 1, slider.step)}
-    return f"""<div class="slider" data-slider="{slider.parameter}">
-<label for="{slider.parameter}"><span>{escape(slider.name)}</span>
+    return f"""<div class="slider" data-slider="{parameter}">
+<label for="{parameter}"><span>{escape(slider.name)}</span>
 <span data-shown>{escape(labels[str(value)])}</span></label>
-<input type="range" id="{slider.parameter}" name="{slider.parameter}" min="{slider.low}" max="{slider.high}"
+<input type="range" id="{parameter}" name="{parameter}" min="{slider.low}" max="{slider.high}"
  step="{slider.step}" value="{value}" data-default="{slider.default}" data-labels="{escape(json.dumps(labels))}">
 </div>"""
 
@@ -308,52 +454,116 @@ def timing_group(fan):
             + "</section>")
 
 
-def judges_only_the_final(fan):
-    """Whether every Preset the fan picked judges only the final, so the time a Watch appears, or does not,
-    can hint at overtime to a fan who remembers the tip-off."""
-    return bool(fan.presets) and all(preset.final_only for preset in fan.presets)
+def join_picks(name, chosen):
+    """The AND or OR choices as chips named `name` for the request, the one `chosen` picked."""
+    return "".join(
+        f'<label class="pick"><input type="radio" name="{escape(name)}" value="{join}"'
+        f'{" checked" if chosen == join else ""}>{JOIN_WORDS[join]}</label>'
+        for join in presets.JOINS)
 
 
-def overtime_warning(fan):
+def player_heading(player):
+    """A player as the page names him beside his chip and above his checks: his name and his team."""
+    return f"{player.name} ({player.team})"
+
+
+def player_pick(player):
+    """One tracked player as a ticked chip, carrying the id, team and name a request names."""
+    return (f'<label class="pick"><input type="checkbox" name="players" '
+            f'value="{escape(players.player_token(player))}" checked>'
+            f'{escape(player_heading(player))}</label>')
+
+
+def players_section(following):
+    """Setup's players section: the tracked players the address names as ticked chips, the search that adds
+    another from the served rosters, and each tracked player's own controls under his chip."""
+    return f"""<div class="picks" id="player-picks">{"".join(player_pick(followed.player) for followed in following)}</div>
+<div class="search"><input type="search" id="player-search" autocomplete="off"
+ aria-label="Find a player" placeholder="Type part of a player&rsquo;s name">
+<div class="picks" id="player-results"></div></div>
+<div id="player-checks">{"".join(player_checks_panel(followed.player.id, player_heading(followed.player), followed.checks)
+                                for followed in following)}</div>"""
+
+
+def player_checks_panel(player_id, heading, checks):
+    """One tracked player's own controls: his name with his own AND or OR beside it as a small toggle, a
+    target slider for each counting stat, and his double-double and triple-double ticks, every control
+    named by his ESPN id and headed `heading`. It never says which check fitted. The setup page also
+    renders it once as a template, with no heading, for the search to fill in when the fan adds him."""
+    sliders = "".join(
+        slider_row(check.slider, checks, players.check_parameter(player_id, check.slider.parameter))
+        for check in players.CHECKS)
+    doubles = "".join(
+        f'<label class="pick"><input type="checkbox" value="1"'
+        f' name="{escape(players.check_parameter(player_id, name))}"'
+        f'{" checked" if ticked else ""}>{escape(words)}</label>'
+        for name, words, ticked in (("double_double", players.DOUBLE_DOUBLE_NAME, checks.double_double),
+                                    ("triple_double", players.TRIPLE_DOUBLE_NAME, checks.triple_double)))
+    joins = join_picks(players.check_parameter(player_id, "join"), checks.join)
+    return f"""<section class="group" data-player-checks="{escape(player_id)}">
+<div class="player-head"><h2><span data-player-name>{escape(heading)}</span></h2>
+<div class="join" role="group" aria-label="Combine this player's checks">{joins}</div></div>
+{sliders}
+<div class="picks">{doubles}</div>
+<p class="note">Zero asks for no number. Each check is judged against the player&rsquo;s usual minutes.</p>
+</section>"""
+
+
+def player_checks_template():
+    """The controls of a player the fan has not added yet, for the setup page's script to fill in with the
+    chosen player's id and name, so a player added from the search judges by his own settings."""
+    return (f'<template id="player-checks-template">'
+            f'{player_checks_panel(NEW_PLAYER, "", players.Checks())}</template>')
+
+
+def judges_only_the_final(picks):
+    """Whether every setting the fan picked judges only the final, so the time a Watch appears, or does
+    not, can hint at overtime to a fan who remembers the tip-off."""
+    return (bool(picks.fan.presets) and all(preset.final_only for preset in picks.fan.presets)
+            and not any(followed.checks for followed in picks.following))
+
+
+def overtime_warning(picks):
     """The warning about a Watch's timing hinting at overtime, kept in the markup so the page's script can
-    show it the moment a fan picks a Preset that judges only the final."""
-    return (f'<p class="notice" id="overtime"{"" if judges_only_the_final(fan) else " hidden"}>'
+    show it the moment every setting the fan picked judges only the final."""
+    return (f'<p class="notice" id="overtime"{"" if judges_only_the_final(picks) else " hidden"}>'
             f'{escape(OVERTIME_WARNING)}</p>')
 
 
-def setup_screen(team_names, picked, fan, notice_text=None):
-    """Setup: the fan's teams, the Presets they like to watch with their sliders, and Done."""
+def setup_screen(team_names, picks, notice_text=None):
+    """Setup: the fan's teams and players, the Presets they like to watch, each tracked player's own
+    checks with their sliders, and Done."""
     teams = "".join(
         f'<label class="pick"><input type="checkbox" name="teams" value="{escape(team)}"'
-        f'{" checked" if team in picked else ""}>{escape(team)}</label>'
+        f'{" checked" if team in picks.teams else ""}>{escape(team)}</label>'
         for team in team_names)
     chips = "".join(
         f'<label class="pick"><input type="checkbox" name="presets" value="{preset.key}"'
-        f'{" checked" if preset in fan.presets else ""}'
+        f'{" checked" if preset in picks.fan.presets else ""}'
         f'{" data-final-only" if preset.final_only else ""}>{escape(preset.name)}</label>'
         for preset in presets.SHIPPED)
-    joins = "".join(
-        f'<label class="pick"><input type="radio" name="join" value="{join}"'
-        f'{" checked" if fan.join == join else ""}>{JOIN_WORDS[join]}</label>'
-        for join in presets.JOINS)
-    groups = "".join(preset_group(preset, fan) for preset in presets.SHIPPED if preset.sliders)
-    cancel = (f'<a class="btn" href="{escape(page_href(picked, fan))}">Cancel</a>'
-              if picked else "")
+    joins = join_picks("join", picks.fan.join)
+    groups = "".join(preset_group(preset, picks.fan) for preset in presets.SHIPPED if preset.sliders)
+    cancel = (f'<a class="btn" href="{escape(page_href(picks))}">Cancel</a>'
+              if picks.teams or picks.following else "")
     body = f"""<main id="main">
-<h1>Which teams do you follow?</h1>
+<h1>Which teams and players do you follow?</h1>
 {notice(notice_text)}
 <form id="setup" method="get" action="/">
 <div class="picks">{teams}</div>
+<h2>Players</h2>
+{players_section(picks.following)}
 <h2>Games I like to watch</h2>
 <div class="picks">{chips}</div>
+{groups}
 <h2>Combine with</h2>
 <div class="picks">{joins}</div>
-{groups}
-{timing_group(fan)}
-{overtime_warning(fan)}
-<button class="btn primary" id="done" type="submit"{"" if fan.presets else " disabled"}>Done</button>
+{timing_group(picks.fan)}
+{overtime_warning(picks)}
+<button class="btn primary" id="done" type="submit"{"" if picks.fan.presets or picks.following else " disabled"}>Done</button>
 {cancel}
 </form>
+{player_checks_template()}
 {CONTROLS}
 </main>"""
     return shell(body)
@@ -365,14 +575,33 @@ def preset_rules(preset, fan):
     return f"{preset.name} ({values})" if values else preset.name
 
 
+def rules_markup(lines):
+    """One rules panel: each line a paragraph, so the words a card lists read one rule at a time."""
+    return "\n".join(f"<p>{escape(line)}</p>" for line in lines)
+
+
 def rules_panel(fan):
-    """The rules the fan's settings apply to every card: the picked Presets with their values, the AND
-    or OR, and the shared timing. It never says how any Preset judged the game, so it cannot spoil it."""
+    """The rules the fan's settings apply to every team card: the picked Presets with their values, the
+    AND or OR, and the shared timing. It never says how any Preset judged the game, so it cannot spoil it."""
     if not fan.presets:
         return "Pick a Preset in setup to judge this game."
     timing = " · ".join(slider_in_words(slider, fan) for slider in presets.TIMING)
-    lines = [preset_rules(preset, fan) for preset in fan.presets] + [JOIN_WORDS[fan.join], timing]
-    return "\n".join(f"<p>{escape(line)}</p>" for line in lines)
+    return rules_markup([preset_rules(preset, fan) for preset in fan.presets]
+                        + [JOIN_WORDS[fan.join], timing])
+
+
+def player_rules(checks):
+    """The checks the fan's settings apply to every player card: each number to reach, the double checks
+    and the AND or OR. It never says which check fitted, so it cannot spoil the night."""
+    if not checks:
+        return rules_markup([players.NO_CHECKS])
+    lines = [slider_in_words(check.slider, checks)
+             for check in players.CHECKS if check.stat in checks.targets]
+    if checks.double_double:
+        lines.append(players.DOUBLE_DOUBLE_NAME)
+    if checks.triple_double:
+        lines.append(players.TRIPLE_DOUBLE_NAME)
+    return rules_markup(lines + [JOIN_WORDS[checks.join]])
 
 
 def highlights_button(button):
@@ -388,28 +617,36 @@ def highlights_button(button):
     return f'<button class="highlights" disabled>{escape(button["label"])}</button>'
 
 
-def card(row, teams, fan):
-    """One followed team's card: a dot carrying the Verdict, its name, the rules applied, the button that
-    opens its catch-up screen whatever the Verdict, and its highlights button.
+def card(row, picks):
+    """One followed team's or player's card: a dot carrying the Verdict, its name, the rules applied, the
+    button that opens its catch-up screen whatever the Verdict, and its highlights button.
 
-    `teams` is every team the list shows, so Back from the catch-up screen returns to them all.
+    `picks` carries the fan's team picks, so Back from the catch-up screen returns to them all. A player's
+    card names the player and lists that player's own checks rather than the Presets.
     """
     team = escape(row["team"])
-    watch = (f'<a class="watching" href="{escape(page_href(teams, fan, catchup_team=row["team"]))}">'
+    player = row.get("player")
+    followed = next((followed for followed in picks.following if followed.player.id == row.get("id")),
+                    None)
+    name = escape(player) if player else team
+    watch = (f'<a class="watching" href="'
+             f'{escape(page_href(picks, catchup_team=row["team"]))}">'
              f'I\'m watching</a>')
     verdict, preview = row["verdict"], row["next_game"]
     if verdict:
         dot = (f'<span class="dot {DOT_CLASSES[verdict]}" role="img" '
                f'aria-label="{escape(verdict)}"></span>')
-        line = ""
+        line = f"<small>{team}</small>" if player else ""
     else:
         # No Verdict yet: a hollow dot, and the Next-game preview or the row's own words under the name.
         dot = '<span class="dot none" aria-hidden="true"></span>'
-        under = escape(preview_words(preview)) if preview else escape(row["detail"] or "")
-        line = f"<small>{under}</small>" if under else ""
-    return f"""<article class="card" data-team="{team}">
-<details><summary>{dot}<span class="t">{team}{line}</span></summary>
-<div class="rules">{rules_panel(fan)}</div></details>
+        under = preview_words(preview) if preview else (row["detail"] or "")
+        line = f"<small>{escape(under)}</small>" if under else ""
+    rules = player_rules(followed.checks) if followed else rules_panel(picks.fan)
+    played = f' data-player="{escape(player)}"' if player else ""
+    return f"""<article class="card" data-team="{team}"{played}>
+<details><summary>{dot}<span class="t">{name}{line}</span></summary>
+<div class="rules">{rules}</div></details>
 <div class="actions">{watch}
 {highlights_button(row.get("highlights"))}</div>
 </article>"""
@@ -475,15 +712,15 @@ STAT_COLUMNS = (("PTS", ("points",)), ("REB", ("rebounds",)), ("AST", ("assists"
                 ("3PT", ("threes_made", "threes_attempted")),
                 ("FT", ("free_throws_made", "free_throws_attempted")))
 
-# The catch-up screen a request names: the team whose game it shows, every team the list holds so Back
-# returns to them all, the fan's settings its links carry, and the moment its pickers name.
-CatchUpView = namedtuple("CatchUpView", "team teams fan moment")
+# The catch-up screen a request names: the team whose game it shows, the fan's picks its links carry so Back
+# returns to the whole list, and the moment its pickers name.
+CatchUpView = namedtuple("CatchUpView", "team picks moment")
 
 
 def catchup_href(view, tab):
     """The catch-up screen's address for `view`'s game at its moment, showing the tab `tab`."""
     period, minutes, seconds = view.moment
-    return page_href(view.teams, view.fan, catchup_team=view.team) + "&" + urlencode(
+    return page_href(view.picks, catchup_team=view.team) + "&" + urlencode(
         [("period", period), ("minutes", str(minutes)), ("seconds", str(seconds)), ("tab", tab)])
 
 
@@ -510,10 +747,10 @@ def catchup_pickers(moment):
 
 
 def catchup_form(view, tab):
-    """The pickers' form: the same GET the screen was opened by, carrying its team, the list's teams and
-    the fan's settings, so the new moment opens the same way."""
-    hidden = ([("catchup", view.team), ("teams", ",".join(view.teams)), ("tab", tab)]
-              + settings_params(view.fan))
+    """The pickers' form: the same GET the screen was opened by, carrying its team, the fan's picks and
+    settings, so the new moment opens the same way."""
+    hidden = ([("catchup", view.team), ("teams", ",".join(view.picks.teams)), ("tab", tab)]
+              + player_params(view.picks.following) + settings_params(view.picks.fan))
     fields = "".join(f'<input type="hidden" name="{name}" value="{escape(str(value))}">'
                      for name, value in hidden)
     return f'<form id="catchup" method="get" action="/">{fields}{catchup_pickers(view.moment)}</form>'
@@ -603,25 +840,25 @@ def catchup_tabs(view, tab):
     return f'<div class="picks">{links}</div>'
 
 
-def back_link(teams, fan):
-    """The Back button from the catch-up screen to the list of the fan's teams."""
-    return f'<a class="btn" href="{escape(page_href(teams, fan))}">Back</a>'
+def back_link(picks):
+    """The Back button from the catch-up screen to the list of the fan's teams and players."""
+    return f'<a class="btn" href="{escape(page_href(picks))}">Back</a>'
 
 
-def catchup_notice(teams, fan, notice_text):
+def catchup_notice(picks, notice_text):
     """The catch-up screen when there is no game to show: the words why, and Back to the list."""
     return shell(f"""<main id="main">
 <h1>Catch-up</h1>
 {notice(notice_text)}
-{back_link(teams, fan)}
+{back_link(picks)}
 </main>""")
 
 
-def catchup_screen(team, teams, fan, game_id, answer, moment, tab):
+def catchup_screen(team, picks, game_id, answer, moment, tab):
     """The catch-up screen for `team`'s game: where the fan is in the recording at `moment`, the score,
     the Box score or Play-by-play tab and Back. The screen's script remembers the moment under `game_id`
     on the phone, so the fan's next visit opens where they left off."""
-    view = CatchUpView(team, teams, fan, moment)
+    view = CatchUpView(team, picks, moment)
     controls = CATCHUP_CONTROLS % {"key": json.dumps(CATCHUP_KEY % {"game": game_id}),
                                    "tops": json.dumps(catchup.CLOCK_SECONDS)}
     body = f"""<main id="main">
@@ -632,16 +869,15 @@ def catchup_screen(team, teams, fan, game_id, answer, moment, tab):
 {catchup_score(answer)}
 {catchup_tabs(view, tab)}
 {TABS[tab].body(answer)}
-{back_link(teams, fan)}
+{back_link(picks)}
 </main>"""
     return shell(body)
 
 
-def list_screen(rows, fan, notice_text=None):
-    """The main screen: one card per followed team, refreshing itself every minute."""
-    teams = [row["team"] for row in rows]
+def list_screen(rows, picks, notice_text=None):
+    """The main screen: one card per followed team and player, refreshing itself every minute."""
     body = f"""<main id="main">
 {notice(notice_text)}
-{"".join(card(row, teams, fan) for row in rows)}
+{"".join(card(row, picks) for row in rows)}
 </main>"""
-    return shell(body, refresh=True, gear_href=page_href(teams, fan, setup=True))
+    return shell(body, refresh=True, gear_href=page_href(picks, setup=True))
