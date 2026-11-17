@@ -2,8 +2,9 @@
 from behind.
 
 The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
-judging.py works out each team's row from ESPN's public JSON and the fan's settings; catchup.py rebuilds
-the score, box score and plays as of the moment the fan names; highlights.py finds each started game's
+judging.py works out each team's row from ESPN's public JSON and the fan's settings; players.py judges each
+Tracked player's night from the same saved game and the player's usual minutes; catchup.py rebuilds the
+score, box score and plays as of the moment the fan names; highlights.py finds each started game's
 highlight reel without giving away its title, thumbnail or length; page.py turns the rows into the list and
 the catch-up answer into the catch-up screen; and this file serves them all, sharing ESPN answers for a
 short while. Only the catch-up answer and screen carry a score, clock or quarter, and only for the plays
@@ -24,6 +25,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import highlights
 import page
+import players
 import presets
 from catchup import TIP_OFF, catch_up, moment_seconds
 from judging import (ESPN, TEAM_LIST, espn_abbreviation, espn_abbreviations, judge, row,
@@ -36,8 +38,9 @@ STATIC_DIR = Path(__file__).resolve().with_name("static")
 
 
 def lifetime_for(url):
-    """How long an ESPN answer is reused: a game's JSON for a cycle, the team list for a day."""
-    return TEAM_LIST_SECONDS if url == TEAM_LIST else CACHE_SECONDS
+    """How long an ESPN answer is reused: a game's JSON for a cycle, the team list or a player's usual
+    minutes for a day."""
+    return TEAM_LIST_SECONDS if url == TEAM_LIST or players.is_average_url(url) else CACHE_SECONDS
 
 
 # One kept ESPN answer: when it was fetched, how long it lasts, and the JSON it holds.
@@ -249,9 +252,15 @@ def respond(path, now, get, reels=None):
     if url.path == "/presets":
         return json_answer(200, presets.definitions())
     if url.path == "/rows":
-        names, fan = teams_and_fan(parse_qs(url.query))
+        params = parse_qs(url.query)
+        names, fan = teams_and_fan(params)
+        tracked = players.tracked_players(params)
+        checks = players.checks_from_query(params)
         try:
-            rows = judge(names, now.date(), get, fan, highlight_buttons(now, reels))
+            rows = []
+            if names:  # no team named spares the team list a request of its own
+                rows += judge(names, now.date(), get, fan, highlight_buttons(now, reels))
+            rows += players.judge(tracked, now.date(), get, checks)
         except ESPN_UNREACHABLE as error:
             return json_answer(503, {"error": espn_outage(error)})
         return json_answer(200, {"rows": rows})

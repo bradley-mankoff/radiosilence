@@ -15,9 +15,11 @@ os.environ["TZ"] = "America/Chicago"
 time.tzset()
 
 import highlights
+import players
 from app import CACHE_SECONDS, Cached, HTML_TYPE, JSON_TYPE, respond
 from catchup import LINE, catch_up
 from judging import ESPN, judge, start_time
+from players import Checks, DID_NOT_PLAY, TrackedPlayer, player_verdict
 from presets import Settings
 
 GAME_DAY = date(2026, 10, 23)
@@ -97,6 +99,17 @@ def espn(responses):
 
     def get(url):
         return responses[url]
+    return get
+
+
+def unreachable_for(responses, broken_url):
+    """Saved ESPN JSON that raises for `broken_url` and answers every other URL, as ESPN refusing one."""
+    saved = espn(responses)
+
+    def get(url):
+        if url == broken_url:
+            raise urllib.error.URLError("offline")
+        return saved(url)
     return get
 
 
@@ -352,6 +365,117 @@ def regulation_end_game():
         game_play("over", 4, "0:00", None, "End Game", "End of Game", "End of Game"),
     ]
     return game
+
+
+# The tracked-player tests follow Luka Doncic, Dallas's d1, through a hand-built Dallas-Boston game.
+TRACKED_ID, TRACKED_NAME = "d1", "Luka Doncic"
+ATHLETE_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes"
+PLAYER_API = f"{ATHLETE_API}/{TRACKED_ID}"
+PLAYER_OVERVIEW = f"{PLAYER_API}/overview"
+PLAYER_STATS = f"{PLAYER_API}/stats"
+ATHLETE_LABELS = ["GP", "MIN", "FG%", "3P%", "FT%", "REB", "AST", "BLK", "STL", "PF", "TO", "PTS"]
+
+
+def clock_at(elapsed):
+    """The quarter and its clock when `elapsed` minutes of game time have been played."""
+    period = int(elapsed // 12) + 1
+    left = 12 * period - elapsed
+    return period, f"{int(left)}:{round((left - int(left)) * 60):02d}"
+
+
+def tracked_game(points=0, rebounds=0, assists=0, steals=0, blocks=0, threes=0,
+                 minutes=6, state="in", bench=False):
+    """A Dallas-Boston game in which Luka Doncic has exactly the named line by `minutes` minutes played.
+
+    He tips off unless `bench`, in which case he enters `minutes` before the end of the 1st quarter. A
+    timeout at the moment the game has been followed to stops the replay's minutes there, so a test's
+    expected projection is the literal it passes rather than one this helper works out.
+    """
+    game = handmade_game()
+    game["header"]["competitions"][0]["status"]["type"]["state"] = state
+    plays = []
+    if bench:
+        game["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["starter"] = False
+        period, clock = clock_at(12 - minutes)
+        plays.append(game_play("sub", period, clock, DAL_ID, "Substitution",
+                               f"{TRACKED_NAME} enters the game for Kyrie Irving", "Substitution",
+                               (TRACKED_ID, "d2")))
+        stop = 12
+    else:
+        stop = minutes
+    period, clock = clock_at(stop)
+    leftover = points - 3 * threes
+    for index in range(threes):
+        plays.append(game_play(f"three{index}", period, clock, DAL_ID, "Jump Shot",
+                               f"{TRACKED_NAME} makes 25-foot three point jumper", "+3 Points",
+                               (TRACKED_ID,), scoring=True, score=3, shooting=True, attempted=3))
+    for index in range(leftover // 2):
+        plays.append(game_play(f"shot{index}", period, clock, DAL_ID, "Driving Layup Shot",
+                               f"{TRACKED_NAME} makes driving layup", "+2 Points",
+                               (TRACKED_ID,), scoring=True, score=2, shooting=True))
+    if leftover % 2:
+        plays.append(game_play("free-throw", period, clock, DAL_ID, "Free Throw - 1 of 1",
+                               f"{TRACKED_NAME} makes free throw", "+1 Point",
+                               (TRACKED_ID,), scoring=True, score=1, shooting=True, attempted=1))
+    for index in range(assists):
+        plays.append(game_play(f"assist{index}", period, clock, DAL_ID, "Jump Shot",
+                               f"Kyrie Irving makes jump shot ({TRACKED_NAME} assists)", "+2 Points",
+                               ("d2", TRACKED_ID), scoring=True, score=2, shooting=True))
+    for index in range(rebounds):
+        plays.append(game_play(f"rebound{index}", period, clock, DAL_ID, "Defensive Rebound",
+                               f"{TRACKED_NAME} defensive rebound", "Rebound", (TRACKED_ID,)))
+    for index in range(steals):
+        plays.append(game_play(f"steal{index}", period, clock, BOS_ID, "Bad Pass",
+                               f"Jayson Tatum bad pass turnover ({TRACKED_NAME} steals)", "Turnover",
+                               ("b1", TRACKED_ID)))
+    for index in range(blocks):
+        plays.append(game_play(f"block{index}", period, clock, BOS_ID, "Jump Shot",
+                               f"Jayson Tatum misses jumper ({TRACKED_NAME} blocks shot)",
+                               "Missed 2PT", ("b1", TRACKED_ID), shooting=True))
+    plays.append(game_play("stop", period, clock, None, "Timeout", "Timeout", "Timeout"))
+    game["plays"] = plays
+    return game
+
+
+def did_not_play_game():
+    """A final Dallas-Boston game with Naji Marshall on the bench and no play naming him."""
+    game = handmade_game()
+    game["header"]["competitions"][0]["status"]["type"]["state"] = "post"
+    game["boxscore"]["players"][0]["statistics"][0]["athletes"].append(
+        roster_player("d6", "Naji Marshall"))
+    game["plays"] = [game_play("end", 4, "0:00", None, "End Game", "End of Game", "End of Game")]
+    return game
+
+
+def athlete_overview(games, minutes):
+    """ESPN's athlete overview with this season's games and minutes per game."""
+    return {"statistics": {"labels": ATHLETE_LABELS, "splits": [{
+        "displayName": "Regular Season", "stats": [str(games), str(minutes), *(["0.0"] * 10)]}]}}
+
+
+def athlete_overview_without_a_season():
+    """ESPN's athlete overview for a player with no games this season: no Regular Season split at all."""
+    return {"statistics": {}}
+
+
+def athlete_seasons(*seasons):
+    """ESPN's athlete season averages, each season a (year, games, minutes) literal."""
+    labels = ["GP", "GS", "MIN", "PTS"]
+    return {"categories": [{"name": "averages", "labels": labels, "statistics": [
+        {"season": {"year": year}, "stats": [str(games), "0", str(minutes), "0"]}
+        for year, games, minutes in seasons]}]}
+
+
+def player_responses(game, overview, seasons=None):
+    """ESPN's saved answers for a Dallas game with one tracked player."""
+    responses = {
+        SCOREBOARD: {"events": [event("player-game", "2026-10-23T23:10Z", "in", (DAL, "0"), (BOS, "0"))]},
+        f"{ESPN}/summary?event=player-game": game,
+        PLAYER_OVERVIEW: overview,
+    }
+    if seasons is not None:
+        responses[PLAYER_STATS] = seasons
+    return responses
 
 
 class JudgingTest(unittest.TestCase):
@@ -1051,6 +1175,224 @@ class CatchUpMinutesTest(unittest.TestCase):
                       scoring=True, score=2, shooting=True),
         ]
         self.assertEqual(minutes_by_name(catch_up(game, "1st", 0, 0))["Luka Doncic"], 7.0)
+
+
+class TrackedPlayerTest(unittest.TestCase):
+    def test_under_six_minutes_is_too_early_even_with_the_number_already_reached(self):
+        # 20 points in 5:30 would be on track and over the target, but 6 minutes have not been played.
+        verdict, _ = player_verdict(tracked_game(points=20, minutes=5.5), TRACKED_ID,
+                                    Checks(targets={"points": 10}), 36.0)
+        self.assertEqual(verdict, "Too early to call")
+
+    def test_a_star_on_track_through_heavy_early_minutes_is_watch(self):
+        # 14 points in the 12 minutes of the 1st project to 42 over his usual 36, reaching 35.
+        verdict, _ = player_verdict(tracked_game(points=14, minutes=12), TRACKED_ID,
+                                    Checks(targets={"points": 35}), 36.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_bench_player_on_track_in_a_few_minutes_is_watch(self):
+        # 8 points in 6 minutes project to 16 over his usual 12, reaching the 15 asked for.
+        verdict, _ = player_verdict(tracked_game(points=8, minutes=6, bench=True), TRACKED_ID,
+                                    Checks(targets={"points": 15}), 12.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_number_already_reached_counts_even_when_the_projection_does_not(self):
+        # 12 points in 20 minutes project to only 6 over his usual 10, but 12 has reached 10.
+        verdict, _ = player_verdict(tracked_game(points=12, minutes=20), TRACKED_ID,
+                                    Checks(targets={"points": 10}), 10.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_projection_that_reaches_the_number_exactly_is_on_track(self):
+        # 10 points in 12 minutes project to exactly 20 over his usual 24.
+        verdict, _ = player_verdict(tracked_game(points=10, minutes=12), TRACKED_ID,
+                                    Checks(targets={"points": 20}), 24.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_points_target_counts_points(self):
+        # 14 points in 12 minutes project to 42 over his usual 36, reaching 35; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(points=14, minutes=12), TRACKED_ID,
+                                    Checks(targets={"points": 35}), 36.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_rebounds_target_counts_rebounds(self):
+        # 6 rebounds in 12 minutes project to exactly 10 over his usual 20; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(rebounds=6, minutes=12), TRACKED_ID,
+                                    Checks(targets={"rebounds": 10}), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_an_assists_target_counts_assists(self):
+        # 4 assists in 12 minutes project to 6.7 over his usual 20, reaching 6; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(assists=4, minutes=12), TRACKED_ID,
+                                    Checks(targets={"assists": 6}), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_threes_made_target_counts_threes_made(self):
+        # 2 threes in 12 minutes project to 3.3 over his usual 20, reaching 3; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(threes=2, minutes=12), TRACKED_ID,
+                                    Checks(targets={"threes_made": 3}), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_steals_target_counts_steals(self):
+        # 2 steals in 12 minutes project to 3.3 over his usual 20, reaching 3; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(steals=2, minutes=12), TRACKED_ID,
+                                    Checks(targets={"steals": 3}), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_blocks_target_counts_blocks(self):
+        # 2 blocks in 12 minutes project to 3.3 over his usual 20, reaching 3; no other stat moves.
+        verdict, _ = player_verdict(tracked_game(blocks=2, minutes=12), TRACKED_ID,
+                                    Checks(targets={"blocks": 3}), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_double_double_is_watch_when_two_stats_are_on_track(self):
+        # 10 points and 10 rebounds in 12 minutes project to 16.7 each over his usual 20.
+        verdict, _ = player_verdict(tracked_game(points=10, rebounds=10, minutes=12), TRACKED_ID,
+                                    Checks(double_double=True), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_double_double_stays_away_when_only_one_stat_is_on_track(self):
+        # 10 points reached, but 2 rebounds in 12 minutes project to only 3.3.
+        verdict, _ = player_verdict(tracked_game(points=10, rebounds=2, minutes=12), TRACKED_ID,
+                                    Checks(double_double=True), 20.0)
+        self.assertEqual(verdict, "Stay away")
+
+    def test_a_triple_double_is_watch_when_three_stats_are_on_track(self):
+        game = tracked_game(points=10, rebounds=10, assists=10, minutes=12)
+        verdict, _ = player_verdict(game, TRACKED_ID, Checks(triple_double=True), 20.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_a_triple_double_needs_three_stats(self):
+        # 10 points and 10 rebounds, but 2 assists in 12 minutes project to only 3.3.
+        game = tracked_game(points=10, rebounds=10, assists=2, minutes=12)
+        verdict, _ = player_verdict(game, TRACKED_ID, Checks(triple_double=True), 20.0)
+        self.assertEqual(verdict, "Stay away")
+
+    def test_and_needs_every_check_while_or_needs_one(self):
+        # Points reach their target while the rebounds' projection stays short of its own.
+        game = tracked_game(points=20, rebounds=2, minutes=12)
+        targets = {"points": 10, "rebounds": 10}
+        self.assertEqual(player_verdict(game, TRACKED_ID, Checks(targets, join="OR"), 20.0)[0],
+                                        "Watch")
+        self.assertEqual(player_verdict(game, TRACKED_ID, Checks(targets, join="AND"), 20.0)[0],
+                                        "Stay away")
+
+    def test_after_the_final_reaching_the_number_is_watch(self):
+        # 22 points in 20 minutes project to only 11 over his usual 10, but 22 has reached 20.
+        verdict, _ = player_verdict(tracked_game(points=22, minutes=20, state="post"),
+                                    TRACKED_ID, Checks(targets={"points": 20}), 10.0)
+        self.assertEqual(verdict, "Watch")
+
+    def test_after_the_final_a_projection_does_not_count(self):
+        # 18 points in 10 minutes would project to 72 over his usual 40, but only 18 were reached.
+        verdict, _ = player_verdict(tracked_game(points=18, minutes=10, state="post"),
+                                    TRACKED_ID, Checks(targets={"points": 20}), 40.0)
+        self.assertEqual(verdict, "Stay away")
+
+    def test_a_player_who_has_not_entered_yet_is_too_early(self):
+        game = tracked_game(points=22, minutes=20)
+        game["boxscore"]["players"][0]["statistics"][0]["athletes"].append(
+            roster_player("d6", "Naji Marshall"))
+        verdict, _ = player_verdict(game, "d6", Checks(targets={"points": 10}), 20.0)
+        self.assertEqual(verdict, "Too early to call")
+
+    def test_a_player_who_did_not_play_reads_did_not_play(self):
+        verdict, detail = player_verdict(did_not_play_game(), "d6",
+                                         Checks(targets={"points": 10}), 20.0)
+        self.assertIsNone(verdict)
+        self.assertEqual(detail, DID_NOT_PLAY)
+
+    def test_a_player_with_five_games_this_season_uses_this_seasons_minutes(self):
+        # 8 points in 10 minutes project to 8 over this season's 10 and 24 over last season's 30.
+        responses = player_responses(
+            tracked_game(points=8, minutes=10),
+            athlete_overview(games=5, minutes=10.0),
+            athlete_seasons((2027, 5, 10.0), (2026, 60, 30.0)))
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(responses), Checks(targets={"points": 20}))[0]
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_a_player_under_five_games_this_season_uses_last_seasons_minutes(self):
+        # 8 points in 10 minutes project to 9.6 over this season's 12 minutes and 24 over last season's 30.
+        responses = player_responses(
+            tracked_game(points=8, minutes=10),
+            athlete_overview(games=4, minutes=12.0),
+            athlete_seasons((2027, 4, 12.0), (2026, 60, 30.0)))
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(responses), Checks(targets={"points": 20}))[0]
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_a_player_with_no_games_this_season_uses_last_seasons_minutes(self):
+        # ESPN lists no season for him this season. 10 points in 10 minutes project to 30 over last
+        # season's 30 minutes, reaching 27; the season before last's 25 would not.
+        responses = player_responses(
+            tracked_game(points=10, minutes=10),
+            athlete_overview_without_a_season(),
+            athlete_seasons((2025, 60, 25.0), (2026, 60, 30.0)))
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(responses), Checks(targets={"points": 27}))[0]
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_a_stats_answer_without_an_averages_category_uses_this_seasons_minutes(self):
+        # 8 points in 10 minutes project to 9.6 over this season's 12 minutes, short of 20.
+        responses = player_responses(
+            tracked_game(points=8, minutes=10),
+            athlete_overview(games=4, minutes=12.0),
+            {"categories": [{"name": "totals", "labels": ["GP"], "statistics": []}]})
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(responses), Checks(targets={"points": 20}))[0]
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_one_players_unreachable_athlete_answer_leaves_the_other_rows_judged(self):
+        # Luka's usual minutes cannot be fetched; Jayson Tatum's 0 points in 20 minutes still judge.
+        tracked = "d1:DAL:Luka%20Doncic,b1:BOS:Jayson%20Tatum"
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        responses[f"{ATHLETE_API}/b1/overview"] = athlete_overview(games=12, minutes=36.0)
+        status, content_type, body = respond(f"/rows?players={tracked}&player_points=20", NOW,
+                                            unreachable_for(responses, PLAYER_OVERVIEW))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["rows"], [
+            {"team": "DAL", "player": TRACKED_NAME, "verdict": None,
+             "detail": "Couldn't reach ESPN.", "next_game": None},
+            {"team": "BOS", "player": "Jayson Tatum", "verdict": "Stay away",
+             "detail": "This one looks out of reach.", "next_game": None},
+        ])
+
+    def test_each_of_several_tracked_players_gets_a_row_judged_by_the_same_checks(self):
+        # Luka's 22 points reach the target; Jayson Tatum has no play in this game, so the same target
+        # leaves his row short while Luka's reads Watch.
+        tracked = [TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME),
+                   TrackedPlayer("b1", "BOS", "Jayson Tatum")]
+        responses = player_responses(tracked_game(points=22, minutes=20),
+                                     athlete_overview(games=12, minutes=36.0))
+        responses[f"{ATHLETE_API}/b1/overview"] = athlete_overview(games=12, minutes=36.0)
+        rows = players.judge(tracked, GAME_DAY, espn(responses), Checks(targets={"points": 20}))
+        self.assertEqual([(row["player"], row["verdict"]) for row in rows],
+                         [(TRACKED_NAME, "Watch"), ("Jayson Tatum", "Stay away")])
+
+    def test_a_player_row_names_the_player(self):
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(night()), Checks(targets={"points": 20}))[0]
+        self.assertEqual(row["player"], TRACKED_NAME)
+
+    def test_a_tracked_players_row_shows_their_teams_next_game(self):
+        row = players.judge([TrackedPlayer(TRACKED_ID, "DAL", TRACKED_NAME)], GAME_DAY,
+                            espn(night()), Checks(targets={"points": 20}))[0]
+        self.assertEqual(row["next_game"], {"day": "Today", "time": "7:30 PM",
+                                             "opponent": "Houston Rockets", "home": True})
+
+    def test_a_player_row_sends_no_score_clock_quarter_percentage_or_tip_off(self):
+        game = tracked_game(points=22, minutes=20)
+        game["header"]["competitions"][0]["competitors"][0]["score"] = "112"
+        game["header"]["competitions"][0]["competitors"][1]["score"] = "105"
+        game["winprobability"] = [{"playId": "shot0", "homeWinPercentage": 0.9876}]
+        responses = player_responses(game, athlete_overview(games=12, minutes=36.0))
+        status, _, body = respond("/rows?players=d1:DAL:Luka%20Doncic&player_points=20",
+                                  NOW, espn(responses))
+        self.assertEqual(status, 200)
+        self.assertIn("Luka Doncic", body.decode())
+        for spoiler in ["112", "105", "0.9876", "2:00", "1st", "2nd", "22", "%", "overtime"]:
+            self.assertNotIn(spoiler, body.decode(), spoiler)
 
 
 class PresetsResponseTest(unittest.TestCase):
@@ -2014,6 +2356,22 @@ class CachingTest(unittest.TestCase):
         now[0] = CACHE_SECONDS
         respond("/rows?teams=BOS", NOW, cache)
         self.assertEqual(fake.count(f"{ESPN}/summary?event=e1"), 2)
+
+    def test_a_players_usual_minutes_are_fetched_once_a_day(self):
+        responses = {TEAM_LIST: ESPN_TEAM_LIST,
+                     **player_responses(tracked_game(points=22, minutes=20),
+                                        athlete_overview(games=12, minutes=36.0))}
+        fake = Counting(responses)
+        now = [0]
+        cache = Cached(fake, clock=lambda: now[0])
+        asked = "/rows?players=d1:DAL:Luka%20Doncic&player_points=20"
+        respond(asked, NOW, cache)
+        now[0] = 12 * 60 * 60
+        respond(asked, NOW, cache)
+        self.assertEqual(fake.count(PLAYER_OVERVIEW), 1)
+        now[0] = 24 * 60 * 60
+        respond(asked, NOW, cache)
+        self.assertEqual(fake.count(PLAYER_OVERVIEW), 2)
 
 
 if __name__ == "__main__":
