@@ -1,3 +1,4 @@
+import collections
 import json
 import os
 import re
@@ -13,6 +14,7 @@ os.environ["TZ"] = "America/Chicago"
 time.tzset()
 
 from app import CACHE_SECONDS, Cached, HTML_TYPE, JSON_TYPE, respond
+from catchup import LINE, catch_up
 from judging import ESPN, judge, start_time
 from presets import Settings
 
@@ -146,6 +148,130 @@ def one_game_row(team, plays, team_at_home=False, fan=None, state="in",
                                               home_score=home_score, away_score=away_score),
     }
     return row_for(team[0], responses, fan=fan)
+
+
+# The catch-up tests use their own two teams and players, so every expected line is a small literal.
+DAL_ID, BOS_ID = "6", "2"
+CATCHUP_URL = f"{ESPN}/summary?event=catchup"
+PERIOD_LABELS = {1: "1st Quarter", 2: "2nd Quarter", 3: "3rd Quarter", 4: "4th Quarter",
+                 5: "OT", 6: "2OT", 7: "3OT"}
+
+
+def line(**stats):
+    """A catch-up line with every stat present, zero unless the test names it."""
+    return {field: stats.get(field, 0) for field in LINE}
+
+
+def game_play(play_id, period, clock, team, type_text, text, short, participants=(),
+              scoring=False, score=0, shooting=False, attempted=2):
+    """One play in ESPN's summary, with the fields the catch-up answer reads."""
+    return {"id": play_id,
+            "period": {"number": period, "displayValue": PERIOD_LABELS[period]},
+            "clock": {"displayValue": clock},
+            "team": {"id": team} if team else None,
+            "type": {"text": type_text},
+            "shortDescription": short,
+            "text": text,
+            "participants": [{"athlete": {"id": player_id}} for player_id in participants],
+            "scoringPlay": scoring, "scoreValue": score,
+            "shootingPlay": shooting, "pointsAttempted": attempted}
+
+
+def roster_player(player_id, name):
+    """One athlete in ESPN's boxscore. The stat values are absurd on purpose: catch-up reads names and ids only."""
+    return {"athlete": {"id": player_id, "displayName": name}, "starter": False,
+            "didNotPlay": False, "stats": ["99", "99"]}
+
+
+def roster_team(team_id, team, players):
+    """One team in ESPN's boxscore, with its roster in ESPN's order."""
+    abbreviation, name = team
+    return {"team": {"id": team_id, "abbreviation": abbreviation, "displayName": name},
+            "statistics": [{"labels": ["MIN", "PTS"],
+                            "athletes": [roster_player(player_id, player_name)
+                                         for player_id, player_name in players]}]}
+
+
+def handmade_game(extra_plays=()):
+    """A hand-built Dallas-Boston game: a jump ball, a made shot with an assist, a miss, a rebound, a
+    foul, a turnover and two free throws, all in the first quarter. `extra_plays` are appended after
+    them, as ESPN appends a late correction."""
+    plays = [
+        game_play("p1", 1, "12:00", DAL_ID, "Jumpball",
+                  "Dereck Lively II vs. Jayson Tatum (Luka Doncic gains possession)", "Jump Ball",
+                  ("d3", "b1")),
+        game_play("p2", 1, "11:40", DAL_ID, "Jump Shot",
+                  "Luka Doncic makes 18-foot jump shot (Kyrie Irving assists)", "+2 Points",
+                  ("d1", "d2"), scoring=True, score=2, shooting=True),
+        game_play("p3", 1, "11:05", BOS_ID, "Jump Shot",
+                  "Jayson Tatum misses 25-foot three point jumper", "Missed 3PT",
+                  ("b1",), shooting=True, attempted=3),
+        game_play("p4", 1, "10:30", DAL_ID, "Offensive Rebound",
+                  "Dereck Lively II offensive rebound", "Rebound", ("d3",)),
+        game_play("p5", 1, "10:10", BOS_ID, "Driving Layup Shot",
+                  "Jayson Tatum makes driving layup", "+2 Points",
+                  ("b1",), scoring=True, score=2, shooting=True),
+        game_play("p6", 1, "9:45", DAL_ID, "Bad Pass",
+                  "Luka Doncic bad pass turnover (Jaylen Brown steals)", "Turnover",
+                  ("d1", "b2")),
+        game_play("p7", 1, "9:20", DAL_ID, "Shooting Foul",
+                  "Dereck Lively II shooting foul", "Foul", ("d3",)),
+        game_play("p8", 1, "9:00", BOS_ID, "Free Throw - 1 of 2",
+                  "Jayson Tatum makes free throw 1 of 2", "+1 Point",
+                  ("b1",), scoring=True, score=1, shooting=True, attempted=1),
+        game_play("p9", 1, "9:00", BOS_ID, "Free Throw - 2 of 2",
+                  "Jayson Tatum misses free throw 2 of 2", "Missed FT",
+                  ("b1",), shooting=True, attempted=1),
+        game_play("p10", 1, "0:00", None, "End Period", "End of the 1st Quarter", "End of 1st"),
+    ]
+    return {
+        "header": {"competitions": [{
+            "status": {"type": {"state": "in"}},
+            "competitors": [
+                {"homeAway": "home", "score": "2",
+                 "team": {"id": DAL_ID, "abbreviation": "DAL", "displayName": "Dallas Mavericks"}},
+                {"homeAway": "away", "score": "3",
+                 "team": {"id": BOS_ID, "abbreviation": "BOS", "displayName": "Boston Celtics"}},
+            ],
+        }]},
+        "boxscore": {"players": [
+            roster_team(DAL_ID, DAL, [("d1", "Luka Doncic"), ("d2", "Kyrie Irving"),
+                                      ("d3", "Dereck Lively II")]),
+            roster_team(BOS_ID, BOS, [("b1", "Jayson Tatum"), ("b2", "Jaylen Brown")]),
+        ]},
+        "plays": plays + list(extra_plays),
+    }
+
+
+def expected_play(play_id, period, clock, team, text):
+    """One play as the catch-up answer sends it."""
+    return {"id": play_id, "period": period, "clock": clock, "team": team, "text": text}
+
+
+def overtime_game():
+    """A hand-built game with three overtimes, each play at a distinctive game time."""
+    game = handmade_game()
+    game["plays"] = [
+        game_play("q4", 4, "12:00", DAL_ID, "Jumpball", "Jump ball to start the 4th", "Jump Ball",
+                  ("d3", "b1")),
+        game_play("reg", 4, "0:00", None, "End Period", "End of the 4th Quarter", "End of 4th"),
+        game_play("ot1", 5, "4:30", DAL_ID, "Driving Layup Shot",
+                  "Luka Doncic makes driving layup", "+2 Points", ("d1",),
+                  scoring=True, score=2, shooting=True),
+        game_play("end1", 5, "0:00", None, "End Period", "End of the 1st OT", "End of 1st OT"),
+        game_play("ot2", 6, "1:00", BOS_ID, "Jump Shot",
+                  "Jayson Tatum makes 20-foot jumper", "+2 Points", ("b1",),
+                  scoring=True, score=2, shooting=True),
+        game_play("ot2-late", 6, "0:59", BOS_ID, "Jump Shot",
+                  "Jayson Tatum makes 21-foot jumper", "+2 Points", ("b1",),
+                  scoring=True, score=2, shooting=True),
+        game_play("end2", 6, "0:00", None, "End Period", "End of the 2nd OT", "End of 2nd OT"),
+        game_play("ot3", 7, "1:00", DAL_ID, "Jump Shot",
+                  "Luka Doncic makes 25-foot three point jumper", "+3 Points", ("d1",),
+                  scoring=True, score=3, shooting=True, attempted=3),
+        game_play("end3", 7, "0:00", None, "End Period", "End of the 3rd OT", "End of 3rd OT"),
+    ]
+    return game
 
 
 class JudgingTest(unittest.TestCase):
@@ -393,6 +519,148 @@ class RowsResponseTest(unittest.TestCase):
         self.assertIn("error", json.loads(body))
 
 
+class CatchUpAnswerTest(unittest.TestCase):
+    def test_mid_quarter_answers_with_the_score_and_lines_from_the_plays_before_it(self):
+        answer = catch_up(handmade_game(), "1st", 10, 0)
+        self.assertEqual(answer["score"], {"home": 2, "away": 2})
+        self.assertEqual(answer["teams"], [
+            {"team": "DAL", "name": "Dallas Mavericks", "home": True,
+             **line(points=2, field_goals_made=1, field_goals_attempted=1, rebounds=1, assists=1)},
+            {"team": "BOS", "name": "Boston Celtics", "home": False,
+             **line(points=2, field_goals_made=1, field_goals_attempted=2, threes_attempted=1)},
+        ])
+        self.assertEqual(answer["players"], [
+            {"id": "d1", "name": "Luka Doncic", "team": "DAL",
+             **line(points=2, field_goals_made=1, field_goals_attempted=1)},
+            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", **line(assists=1)},
+            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", **line(rebounds=1)},
+            {"id": "b1", "name": "Jayson Tatum", "team": "BOS",
+             **line(points=2, field_goals_made=1, field_goals_attempted=2, threes_attempted=1)},
+            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", **line()},
+        ])
+
+    def test_mid_quarter_plays_run_newest_first_in_espn_text(self):
+        answer = catch_up(handmade_game(), "1st", 10, 0)
+        self.assertEqual(answer["plays"], [
+            expected_play("p5", "1st Quarter", "10:10", "BOS", "Jayson Tatum makes driving layup"),
+            expected_play("p4", "1st Quarter", "10:30", "DAL", "Dereck Lively II offensive rebound"),
+            expected_play("p3", "1st Quarter", "11:05", "BOS",
+                          "Jayson Tatum misses 25-foot three point jumper"),
+            expected_play("p2", "1st Quarter", "11:40", "DAL",
+                          "Luka Doncic makes 18-foot jump shot (Kyrie Irving assists)"),
+            expected_play("p1", "1st Quarter", "12:00", "DAL",
+                          "Dereck Lively II vs. Jayson Tatum (Luka Doncic gains possession)"),
+        ])
+
+    def test_a_quarter_break_answer_holds_the_whole_period(self):
+        answer = catch_up(handmade_game(), "1st", 0, 0)
+        self.assertEqual(answer["score"], {"home": 2, "away": 3})
+        self.assertEqual(answer["teams"], [
+            {"team": "DAL", "name": "Dallas Mavericks", "home": True,
+             **line(points=2, field_goals_made=1, field_goals_attempted=1, rebounds=1, assists=1,
+                    turnovers=1, fouls=1)},
+            {"team": "BOS", "name": "Boston Celtics", "home": False,
+             **line(points=3, field_goals_made=1, field_goals_attempted=2, threes_attempted=1,
+                    free_throws_made=1, free_throws_attempted=2, steals=1)},
+        ])
+        self.assertEqual(answer["players"], [
+            {"id": "d1", "name": "Luka Doncic", "team": "DAL",
+             **line(points=2, field_goals_made=1, field_goals_attempted=1, turnovers=1)},
+            {"id": "d2", "name": "Kyrie Irving", "team": "DAL", **line(assists=1)},
+            {"id": "d3", "name": "Dereck Lively II", "team": "DAL", **line(rebounds=1, fouls=1)},
+            {"id": "b1", "name": "Jayson Tatum", "team": "BOS",
+             **line(points=3, field_goals_made=1, field_goals_attempted=2, threes_attempted=1,
+                    free_throws_made=1, free_throws_attempted=2)},
+            {"id": "b2", "name": "Jaylen Brown", "team": "BOS", **line(steals=1)},
+        ])
+
+    def test_a_quarter_break_play_list_runs_from_the_period_whistle_back_to_tip_off(self):
+        answer = catch_up(handmade_game(), "1st", 0, 0)
+        self.assertEqual([play["id"] for play in answer["plays"]],
+                         ["p10", "p8", "p9", "p7", "p6", "p5", "p4", "p3", "p2", "p1"])
+        self.assertEqual(answer["plays"][0],
+                         expected_play("p10", "1st Quarter", "0:00", None, "End of the 1st Quarter"))
+
+    def test_a_made_heave_counts_as_an_attempt_but_a_missed_one_does_not(self):
+        game = handmade_game()
+        game["plays"] = [
+            game_play("made-heave", 1, "8:00", BOS_ID, "Heave Jump Shot",
+                      "Jayson Tatum makes 60-foot heave jump shot", "+3 Points", ("b1",),
+                      scoring=True, score=3, shooting=True, attempted=3),
+            game_play("missed-heave", 1, "7:00", BOS_ID, "Heave Jump Shot",
+                      "Jayson Tatum misses 60-foot heave jump shot", "Missed 3PT", ("b1",),
+                      shooting=True, attempted=3),
+        ]
+        answer = catch_up(game, "1st", 0, 0)
+        tatum = next(player for player in answer["players"] if player["id"] == "b1")
+        self.assertEqual((tatum["points"], tatum["field_goals_attempted"], tatum["threes_attempted"]),
+                         (3, 1, 1))
+
+    def test_a_late_correction_counts_at_its_game_time(self):
+        correction = game_play("p11", 1, "9:50", DAL_ID, "Defensive Rebound",
+                               "Luka Doncic defensive rebound", "Rebound", ("d1",))
+        played = catch_up(handmade_game([correction]), "1st", 9, 47)
+        self.assertEqual([play["id"] for play in played["plays"]],
+                         ["p11", "p5", "p4", "p3", "p2", "p1"])
+        self.assertEqual(next(player for player in played["players"] if player["id"] == "d1")["rebounds"], 1)
+        before_it = catch_up(handmade_game([correction]), "1st", 9, 52)
+        self.assertEqual([play["id"] for play in before_it["plays"]], ["p5", "p4", "p3", "p2", "p1"])
+        self.assertEqual(next(player for player in before_it["players"] if player["id"] == "d1")["rebounds"], 0)
+        in_order = catch_up(handmade_game([correction]), "1st", 9, 40)
+        self.assertEqual([play["id"] for play in in_order["plays"]],
+                         ["p6", "p11", "p5", "p4", "p3", "p2", "p1"])
+
+    def test_nine_minutes_of_overtime_is_four_minutes_into_the_second_overtime(self):
+        answer = catch_up(overtime_game(), "OT", 9, 0)
+        self.assertEqual([play["id"] for play in answer["plays"]],
+                         ["ot2", "end1", "ot1", "reg", "q4"])
+        self.assertEqual(answer["score"], {"home": 2, "away": 2})
+
+    def test_fourteen_minutes_of_overtime_is_four_minutes_into_the_third_overtime(self):
+        answer = catch_up(overtime_game(), "OT", 14, 0)
+        self.assertEqual([play["id"] for play in answer["plays"]],
+                         ["ot3", "end2", "ot2-late", "ot2", "end1", "ot1", "reg", "q4"])
+        self.assertEqual(answer["score"], {"home": 5, "away": 4})
+
+    def test_an_overtime_moment_in_a_regulation_game_is_the_whole_game(self):
+        overtime_moment = catch_up(handmade_game(), "OT", 9, 0)
+        end_of_regulation = catch_up(handmade_game(), "4th", 0, 0)
+        self.assertEqual(overtime_moment, end_of_regulation)
+        self.assertEqual(set(overtime_moment), {"score", "teams", "players", "plays"})
+        self.assertEqual(overtime_moment["score"], {"home": 2, "away": 3})
+        self.assertEqual(len(overtime_moment["plays"]), 10)
+
+    def test_a_catch_up_request_sends_nothing_after_the_moment(self):
+        summary = handmade_game()
+        summary["plays"] = [
+            game_play("early-1", 1, "11:40", DAL_ID, "Jump Shot",
+                      "Luka Doncic makes 18-foot jump shot", "+2 Points", ("d1",),
+                      scoring=True, score=2, shooting=True),
+            game_play("later-1", 1, "9:45", BOS_ID, "Jump Shot",
+                      "LATER TATUM THREE", "+3 Points", ("b1",),
+                      scoring=True, score=3, shooting=True, attempted=3),
+            game_play("later-2", 1, "9:20", BOS_ID, "Free Throw - 1 of 1",
+                      "LATER TATUM FREE THROW", "+1 Point", ("b1",),
+                      scoring=True, score=1, shooting=True, attempted=1),
+        ]
+        summary["header"]["competitions"][0]["competitors"][1]["score"] = "6"
+        responses = {
+            SCOREBOARD: {"events": [event("catchup", "2026-10-23T23:10Z", "in",
+                                          (DAL, "2"), (BOS, "6"))]},
+            CATCHUP_URL: summary,
+        }
+        status, content_type, body = respond(
+            "/catchup?teams=DAL&period=1st&minutes=10&seconds=0", NOW, espn(responses))
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, JSON_TYPE)
+        answer = json.loads(body)
+        self.assertEqual(answer["score"], {"home": 2, "away": 0})
+        self.assertEqual([play["id"] for play in answer["plays"]], ["early-1"])
+        self.assertEqual(next(player for player in answer["players"] if player["id"] == "b1")["points"], 0)
+        for spoiler in ["LATER", "9:45", "9:20", '"away": 6', '"points": 3', "99"]:
+            self.assertNotIn(spoiler, body.decode(), spoiler)
+
+
 class PresetsResponseTest(unittest.TestCase):
     def test_the_presets_answer_lists_each_preset_with_its_sliders_and_defaults(self):
         status, content_type, body = respond("/presets", NOW, espn(night()))
@@ -627,6 +895,36 @@ class PageTest(unittest.TestCase):
 SEASON_CACHE = "/tmp/bgw-season-2026"
 
 
+def official_lines(game):
+    """ESPN's own final boxscore lines by player id, read here to compare against the replay."""
+    lines = {}
+    for team in game["boxscore"]["players"]:
+        statistics = team["statistics"][0]
+        labels = statistics["labels"]
+        for athlete in statistics["athletes"]:
+            if not athlete.get("stats") or "id" not in athlete.get("athlete", {}):
+                continue
+            values = dict(zip(labels, athlete["stats"]))
+            field_goals, threes, free_throws = (values["FG"].split("-"), values["3PT"].split("-"),
+                                               values["FT"].split("-"))
+            lines[athlete["athlete"]["id"]] = {
+                "points": int(values["PTS"]),
+                "field_goals_made": int(field_goals[0]),
+                "field_goals_attempted": int(field_goals[1]),
+                "threes_made": int(threes[0]),
+                "threes_attempted": int(threes[1]),
+                "free_throws_made": int(free_throws[0]),
+                "free_throws_attempted": int(free_throws[1]),
+                "rebounds": int(values["REB"]),
+                "assists": int(values["AST"]),
+                "steals": int(values["STL"]),
+                "blocks": int(values["BLK"]),
+                "turnovers": int(values["TO"]),
+                "fouls": int(values["PF"]),
+            }
+    return lines
+
+
 @unittest.skipUnless(os.path.exists(f"{SEASON_CACHE}/schedule.json"),
                      f"no cached 2025-26 season in {SEASON_CACHE}")
 class SeasonReplayTest(unittest.TestCase):
@@ -653,6 +951,34 @@ class SeasonReplayTest(unittest.TestCase):
                 stay_away += 1
         self.assertEqual(played, 82)
         self.assertEqual(stay_away, 25)
+
+    def test_a_full_game_replay_matches_espn_for_points_made_shots_and_free_throws(self):
+        with open(f"{SEASON_CACHE}/schedule.json") as saved:
+            schedule = json.load(saved)
+        completed = [event for event in schedule["events"]
+                     if event["competitions"][0]["status"]["type"]["state"] == "post"]
+        compared, matched, games = collections.Counter(), collections.Counter(), 0
+        for event in completed:
+            with open(f"{SEASON_CACHE}/{event['id']}.json") as saved:
+                game = json.load(saved)
+            if not game.get("plays") or not game.get("boxscore", {}).get("players"):
+                continue
+            games += 1
+            rebuilt = {player["id"]: player for player in catch_up(game, "OT", 50, 59)["players"]}
+            for player_id, official in official_lines(game).items():
+                for field, expected in official.items():
+                    compared[field] += 1
+                    matched[field] += rebuilt[player_id][field] == expected
+        rates = {field: matched[field] / compared[field] for field in compared}
+        print(f"\n{games} cached 2025-26 games replayed; match rate by stat:",
+              {field: f"{rate:.2%}" for field, rate in rates.items()})
+        self.assertEqual(games, 82)
+        for field in ("points", "field_goals_made", "threes_made",
+                      "free_throws_made", "free_throws_attempted"):
+            self.assertEqual(rates[field], 1, field)
+        for field in ("field_goals_attempted", "threes_attempted", "rebounds", "assists",
+                      "steals", "blocks", "turnovers", "fouls"):
+            self.assertGreaterEqual(rates[field], 0.99, field)
 
 
 class CachingTest(unittest.TestCase):

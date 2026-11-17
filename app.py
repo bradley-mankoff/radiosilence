@@ -2,9 +2,11 @@
 from behind.
 
 The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
-judging.py works out each team's row from ESPN's public JSON and the fan's settings; page.py turns those
-rows into the page; and this file serves both, sharing ESPN answers for a short while. No answer includes
-a score, clock, quarter, win-probability percentage, or a started game's tip-off time.
+judging.py works out each team's row from ESPN's public JSON and the fan's settings; catchup.py rebuilds
+the score, box score and plays as of the moment the fan names; page.py turns the rows into the page; and
+this file serves them all, sharing ESPN answers for a short while. Only the catch-up answer carries a
+score, clock or quarter, and only for the plays at or before the moment the fan names: every other answer
+holds no score, clock, quarter, win-probability percentage, or a started game's tip-off time.
 """
 
 import json
@@ -20,7 +22,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import page
 import presets
-from judging import TEAM_LIST, espn_abbreviations, judge, row
+from catchup import catch_up
+from judging import (ESPN, TEAM_LIST, espn_abbreviation, espn_abbreviations, judge, row,
+                     start_time, started_game)
 
 CACHE_SECONDS = 30  # one ESPN fetch per URL per cycle; the page refreshes every 60 seconds
 TEAM_LIST_SECONDS = 24 * 60 * 60  # ESPN's team list changes only between seasons
@@ -66,6 +70,12 @@ JSON_TYPE = "application/json; charset=utf-8"
 HTML_TYPE = "text/html; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
 
+
+def json_answer(status, payload):
+    """One JSON answer: its status, the JSON content type and the encoded body."""
+    return status, JSON_TYPE, json.dumps(payload).encode()
+
+
 # Only these files are served from disk, so a request cannot reach any other path.
 STATIC_FILES = {
     "manifest.webmanifest": "application/manifest+json; charset=utf-8",
@@ -108,6 +118,39 @@ def root_page(query, now, get):
         return page.list_screen([row(name) for name in names], outage)
 
 
+def catchup_answer(params, now, get):
+    """The rows and plays as of the moment a catch-up request names, in the game of the first named team
+    that has started one on the Game day.
+
+    The query names `teams`, `period`, `minutes` and `seconds`; the moment is the same one the catch-up
+    screen's pickers offer. ESPN's team list decides which names are teams, and only a team with a game
+    that has started on the Game day has a catch-up answer.
+    """
+    names = named_teams(params.get("teams", []))
+    try:
+        period = params["period"][0]
+        minutes = int(params["minutes"][0])
+        seconds = int(params["seconds"][0])
+    except (KeyError, ValueError):
+        return json_answer(400, {"error": "Name a period, minutes and seconds."})
+    known = espn_abbreviations(get)
+    abbreviations = [espn_abbreviation(name, known) for name in names]
+    if not any(abbreviations):
+        return json_answer(404, {"error": "ESPN doesn't list an NBA team by that name."})
+    day = now.date()
+    games = get(f"{ESPN}/scoreboard?dates={day:%Y%m%d}")
+    today_games = [event for event in games["events"] if start_time(event).date() == day]
+    game = next((started_game(today_games, abbreviation)
+                 for abbreviation in abbreviations if abbreviation), None)
+    if game is None:
+        return json_answer(404, {"error": "That team has no started game on the Game day."})
+    summary = get(f"{ESPN}/summary?event={game['id']}")
+    try:
+        return json_answer(200, catch_up(summary, period, minutes, seconds))
+    except ValueError as error:
+        return json_answer(400, {"error": str(error)})
+
+
 def respond(path, now, get):
     """Return (status, content type, body bytes) for a GET of `path`.
 
@@ -115,14 +158,19 @@ def respond(path, now, get):
     """
     url = urlsplit(path)
     if url.path == "/presets":
-        return 200, JSON_TYPE, json.dumps(presets.definitions()).encode()
+        return json_answer(200, presets.definitions())
     if url.path == "/rows":
         names, fan = teams_and_fan(parse_qs(url.query))
         try:
             rows = judge(names, now.date(), get, fan)
         except ESPN_UNREACHABLE as error:
-            return 503, JSON_TYPE, json.dumps({"error": espn_outage(error)}).encode()
-        return 200, JSON_TYPE, json.dumps({"rows": rows}).encode()
+            return json_answer(503, {"error": espn_outage(error)})
+        return json_answer(200, {"rows": rows})
+    if url.path == "/catchup":
+        try:
+            return catchup_answer(parse_qs(url.query), now, get)
+        except ESPN_UNREACHABLE as error:
+            return json_answer(503, {"error": espn_outage(error)})
     static = url.path[1:]
     if static in STATIC_FILES:  # the manifest and its icons, by name, so no other path reaches disk
         return 200, STATIC_FILES[static], (STATIC_DIR / static).read_bytes()
