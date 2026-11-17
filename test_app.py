@@ -992,18 +992,68 @@ def summary_text(card):
     return words(re.search(r"<summary>(.*?)</summary>", card, re.S).group(1))
 
 
-def checked_teams(page):
+def checked(page, name):
+    """The values of the `name` checkboxes a page has ticked, sorted."""
     return sorted(attrs["value"] for tag, attrs in tags(page)
-                  if tag == "input" and attrs.get("name") == "teams" and "checked" in attrs)
+                  if tag == "input" and attrs.get("name") == name and "checked" in attrs)
 
 
-class PageTest(unittest.TestCase):
+def presets_offered(page):
+    """The Presets a setup page offers as chips, in order, by the key each travels as."""
+    return [attrs["value"] for tag, attrs in tags(page)
+            if tag == "input" and attrs.get("name") == "presets"]
+
+
+def joins_offered(page):
+    """The AND or OR choices a setup page offers, in order: (its value, whether it is checked)."""
+    return [(attrs["value"], "checked" in attrs) for tag, attrs in tags(page)
+            if tag == "input" and attrs.get("name") == "join"]
+
+
+def slider_rows(page):
+    """The slider rows a setup page renders, by the query parameter each carries: its markup and its words."""
+    return {parameter: (markup, words(markup))
+            for parameter, markup in re.findall(r'<div class="slider" data-slider="([^"]+)">(.*?)</div>',
+                                               page, re.S)}
+
+
+def slider_input(markup):
+    """The attributes of the one range input a slider row holds."""
+    return next(attrs for tag, attrs in tags(markup) if tag == "input")
+
+
+def slider_labels(markup):
+    """The words a slider row can show, by the value it takes, as it serves them."""
+    return json.loads(slider_input(markup)["data-labels"])
+
+
+def done_button(page):
+    """The button that finishes setup, as its attributes."""
+    return next(attrs for tag, attrs in tags(page) if tag == "button" and attrs.get("id") == "done")
+
+
+def script(page, marker):
+    """The inline script in `page` that holds `marker`, with its whitespace squeezed so a test can read it."""
+    body = next(body for body in re.findall(r"<script>(.*?)</script>", page, re.S) if marker in body)
+    return " ".join(body.split())
+
+
+def card_rules(card):
+    """The words of a card's rules panel."""
+    return words(re.search(r'<div class="rules">(.*?)</div>', card, re.S).group(1))
+
+
+class PageServing(unittest.TestCase):
+    """The page seam: the page respond serves for a path on the test's Game day."""
+
     def page(self, path="/", get=None):
         status, content_type, body = respond(path, NOW, get or espn(night()))
         self.assertEqual(status, 200)
         self.assertEqual(content_type, HTML_TYPE)
         return body.decode()
 
+
+class PageTest(PageServing):
     def test_the_first_visit_opens_team_setup(self):
         page = self.page("/")
         self.assertIn(("form", {"id": "setup", "method": "get", "action": "/"}), tags(page))
@@ -1015,33 +1065,39 @@ class PageTest(unittest.TestCase):
         self.assertEqual(sorted(values), sorted(NBA_TEAMS))
 
     def test_the_page_saves_picked_teams_on_the_phone(self):
-        self.assertRegex(self.page("/"), r'localStorage\.setItem\("radiosilence\.teams", picked\)')
+        self.assertRegex(self.page("/"), r'localStorage\.setItem\(TEAMS, picks\)')
 
-    def test_the_page_sends_a_fan_with_saved_teams_to_their_cards(self):
+    def test_the_page_sends_a_fan_with_saved_teams_and_settings_to_their_cards(self):
         page = self.page("/")
-        self.assertRegex(page, r'localStorage\.getItem\("radiosilence\.teams"\)')
-        self.assertIn('location.replace("/?teams=" + encodeURIComponent(saved))', page)
+        self.assertRegex(page, r'localStorage\.getItem\(TEAMS\)')
+        self.assertIn('location.replace("/?teams=" + encodeURIComponent(savedTeams) + settingsQuery())',
+                      page)
+        self.assertIn('localStorage.getItem(SETTINGS)', page)
 
     def test_picking_teams_shows_one_card_per_team(self):
         page = self.page("/?teams=LAL&teams=BOS&teams=IND")
         self.assertEqual(sorted(cards(page)), ["BOS", "IND", "LAL"])
 
     def test_the_list_header_shows_only_the_app_name_and_the_gear(self):
-        page = self.page("/?teams=LAL")
+        page = self.page("/?teams=LAL&presets=blow")
         header = re.search(r"<header>(.*?)</header>", page, re.S).group(1)
         self.assertEqual(words(header), "RadioSilence ⚙︎")
-        self.assertEqual(next(attrs for tag, attrs in tags(header) if tag == "a")["href"],
-                         "/?setup=1&teams=LAL")
+        href = next(attrs for tag, attrs in tags(header) if tag == "a")["href"]
+        self.assertTrue(href.startswith("/?setup=1&teams=LAL&"), href)
+        self.assertIn("presets=blow", href)
 
     def test_the_comma_joined_teams_the_script_saves_show_one_card_each(self):
         # The script saves the picks joined with commas, so a reload arrives as one `teams` value.
         self.assertEqual(sorted(cards(self.page("/?teams=LAL,BOS"))), ["BOS", "LAL"])
 
-    def test_the_gear_reopens_setup_with_the_fans_teams_ticked(self):
-        page = self.page("/?teams=LAL&teams=BOS")
+    def test_the_gear_reopens_setup_with_the_fans_teams_and_settings(self):
+        page = self.page("/?teams=LAL&teams=BOS&presets=blow&join=AND&blow_upper=97")
         gear = next(attrs for tag, attrs in tags(page) if attrs.get("class") == "gear")
         setup = self.page(gear["href"])
-        self.assertEqual(checked_teams(setup), ["BOS", "LAL"])
+        self.assertEqual(checked(setup, "teams"), ["BOS", "LAL"])
+        self.assertEqual(checked(setup, "presets"), ["blow"])
+        self.assertEqual(joins_offered(setup), [("OR", False), ("AND", True)])
+        self.assertEqual(slider_input(slider_rows(setup)["blow_upper"][0])["value"], "97")
 
     def assert_dot(self, team, verdict, dot_class, colour):
         """The card's dot: its class and the Verdict it labels, no Verdict word, and the colour it paints."""
@@ -1071,7 +1127,7 @@ class PageTest(unittest.TestCase):
         card = cards(self.page("/?teams=BOS&presets=blow"))["BOS"]
         self.assertIn("<details>", card)
         self.assertNotIn("<details open", card)
-        self.assertIn("The Presets you pick decide this dot.", words(card))
+        self.assertIn("No blowout losses", words(card))
         self.assertNotIn("<button", re.search(r"<summary>(.*?)</summary>", card, re.S).group(1))
 
     def test_the_highlights_button_says_no_highlights_yet_and_is_disabled(self):
@@ -1117,14 +1173,17 @@ class PageTest(unittest.TestCase):
             width, height = struct.unpack(">II", body[16:24])
             self.assertEqual(f"{width}x{height}", icon["sizes"])
 
-    def test_a_live_game_puts_no_score_clock_quarter_or_percentage_in_the_page_or_its_script(self):
+    def test_a_live_game_puts_no_score_clock_quarter_or_percentage_outside_the_rules_panel(self):
         page = self.page("/?teams=BOS&teams=IND&teams=LAL&teams=DAL&teams=SA&presets=blow")
-        # The rules panel's words are the same for every game, not a Reading from this one.
-        self.assertIn("The Presets you pick decide this dot.", page)
-        for spoiler in ["117", "104", "88", "91", "96", "77", "7:12", "8:00", "3:00", "0:00",
-                        "3rd", "4th", "0.99", "0.6234", "0.01", "98%", "95%",
+        # What the page carries about the games is the Verdict and the Next-game preview. The percentages
+        # and moments it also carries are the fan's own slider values in a card's rules panel, which say
+        # nothing about a game, so they come out before the check: a Reading from a game that leaked a
+        # score, clock, quarter or percentage anywhere else would still show.
+        outside_rules = re.sub(r'<div class="rules">.*?</div>', "", page, flags=re.S)
+        for spoiler in ["117", "104", "88", "91", "96", "77", "7:12", "8:00", "5:00", "3:00", "0:00",
+                        "98%", "95%", "0.99", "0.6234", "0.01", "1st", "2nd", "3rd", "4th",
                         "12:00 PM", "6:10 PM", "5:40 PM", "overtime", "final"]:
-            self.assertNotIn(spoiler, page, spoiler)
+            self.assertNotIn(spoiler, outside_rules, spoiler)
 
 
 SEASON_CACHE = "/tmp/bgw-season-2026"
@@ -1203,6 +1262,200 @@ def cached_season():
                    f"{ESPN}/summary?event={event['id']}": game}
         games.append((event, game, day, answers))
     return games
+
+
+class PresetSetupTest(PageServing):
+    def controls(self):
+        """Setup's own script, the one that shows the sliders and keeps the settings."""
+        return script(self.page("/?setup=1"), "data-reset")
+
+    def test_setup_offers_the_four_presets_as_chips_with_none_picked(self):
+        setup = self.page("/?setup=1")
+        self.assertEqual(presets_offered(setup), ["wins", "blow", "close", "high"])
+        self.assertEqual(checked(setup, "presets"), [])
+        for name in ["Wins for my team", "No blowout losses", "Close games", "High-scoring games"]:
+            self.assertIn(name, words(setup))
+
+    def test_setup_cannot_finish_until_a_preset_is_picked(self):
+        self.assertIn("disabled", done_button(self.page("/?setup=1")))
+        self.assertNotIn("disabled", done_button(self.page("/?setup=1&presets=blow")))
+
+    def test_setup_offers_any_one_fits_or_all_must_fit_with_or_first(self):
+        setup = self.page("/?setup=1")
+        self.assertEqual(joins_offered(setup), [("OR", True), ("AND", False)])
+        self.assertIn("Any one fits (OR)", words(setup))
+        self.assertIn("All must fit (AND)", words(setup))
+
+    def test_each_slider_shows_its_shipped_value_and_range(self):
+        rows = slider_rows(self.page("/?setup=1"))
+        inputs = {parameter: slider_input(markup) for parameter, (markup, _) in rows.items()}
+        self.assertEqual({parameter: (attrs["min"], attrs["max"], attrs["value"])
+                          for parameter, attrs in inputs.items() if parameter not in ("judge_from", "freeze_at")},
+                         {"blow_upper": ("90", "99", "98"), "blow_lower": ("85", "98", "95"),
+                          "close_points": ("1", "20", "5"), "close_minutes": ("1", "12", "5"),
+                          "along_points": ("1", "20", "9"), "along_share": ("1", "99", "66"),
+                          "high_total": ("150", "350", "240")})
+        self.assertIn("Stay away above 98%", rows["blow_upper"][1])
+        self.assertIn("Reach a total of 240 points", rows["high_total"][1])
+
+    def test_only_the_picked_presets_sliders_are_shown(self):
+        setup = self.page("/?setup=1&presets=blow")
+        groups = dict(re.findall(r'<section class="group" data-preset="([^"]+)"([^>]*)>', setup))
+        self.assertEqual(groups, {"blow": "", "close": " hidden", "high": " hidden"})
+
+    def test_the_shared_timing_is_not_a_preset_group_so_picking_one_cannot_hide_it(self):
+        setup = self.page("/?setup=1&presets=blow")
+        timing = re.search(r'<section class="group" data-timing([^>]*)>\s*<h2>Timing</h2>(.*?)</section>',
+                           setup, re.S)
+        self.assertEqual(timing.group(1), "")
+        self.assertEqual(re.findall(r'name="([^"]+)"', timing.group(2)), ["judge_from", "freeze_at"])
+
+    def test_the_judge_from_slider_shows_the_moment_it_names(self):
+        markup, label = slider_rows(self.page("/?setup=1"))["judge_from"]
+        attrs = slider_input(markup)
+        self.assertEqual((attrs["min"], attrs["max"], attrs["step"], attrs["value"]),
+                         ("0", "2160", "30", "1080"))
+        self.assertEqual(label, "Judge from 6:00 left in the 2nd")
+        labels = slider_labels(markup)
+        self.assertEqual((labels["0"], labels["1080"], labels["1440"], labels["2160"]),
+                         ("Tip-off", "6:00 left in the 2nd", "Start of the 3rd", "Start of the 4th"))
+
+    def test_the_freeze_at_slider_shows_the_moment_it_names(self):
+        markup, label = slider_rows(self.page("/?setup=1"))["freeze_at"]
+        attrs = slider_input(markup)
+        self.assertEqual((attrs["min"], attrs["max"], attrs["step"], attrs["value"]),
+                         ("2160", "2880", "30", "2580"))
+        self.assertEqual(label, "Freeze at 5:00 left in the 4th")
+        labels = slider_labels(markup)
+        self.assertEqual((labels["2160"], labels["2880"]), ("Start of the 4th", "End of the 4th"))
+
+    def test_an_off_step_timing_value_shows_the_nearest_step_instead_of_crashing(self):
+        rows = slider_rows(self.page("/?setup=1&judge_from=1085&freeze_at=2705"))
+        self.assertEqual((slider_input(rows["judge_from"][0])["value"],
+                          slider_input(rows["freeze_at"][0])["value"]), ("1080", "2700"))
+        self.assertIn("Judge from 6:00 left in the 2nd", rows["judge_from"][1])
+        self.assertIn("Freeze at 3:00 left in the 4th", rows["freeze_at"][1])
+
+    def test_setup_and_a_cards_rules_show_the_same_moment_for_an_off_step_value(self):
+        setup = self.page("/?setup=1&presets=blow&judge_from=1085")
+        card = cards(self.page("/?teams=BOS&presets=blow&judge_from=1085"))["BOS"]
+        self.assertIn("Judge from 6:00 left in the 2nd", slider_rows(setup)["judge_from"][1])
+        self.assertIn("Judge from 6:00 left in the 2nd", card_rules(card))
+
+    def test_an_out_of_range_timing_value_still_falls_back_to_its_default(self):
+        rows = slider_rows(self.page("/?setup=1&judge_from=3000&freeze_at=9999"))
+        self.assertEqual((slider_input(rows["judge_from"][0])["value"],
+                          slider_input(rows["freeze_at"][0])["value"]), ("1080", "2580"))
+
+    def test_setup_shows_the_settings_the_address_names(self):
+        setup = self.page("/?setup=1&presets=blow,close&join=AND&blow_upper=97&close_points=4")
+        self.assertEqual(checked(setup, "presets"), ["blow", "close"])
+        self.assertEqual(joins_offered(setup), [("OR", False), ("AND", True)])
+        rows = slider_rows(setup)
+        self.assertEqual(slider_input(rows["blow_upper"][0])["value"], "97")
+        self.assertIn("Stay away above 97%", rows["blow_upper"][1])
+        self.assertIn("Close ending within 4 points", rows["close_points"][1])
+
+    def test_the_setup_form_sends_the_teams_presets_join_and_every_slider(self):
+        setup = self.page("/?setup=1")
+        form = re.search(r'<form id="setup".*?</form>', setup, re.S).group(0)
+        self.assertEqual(collections.Counter(attrs.get("name") for tag, attrs in tags(form)
+                                             if tag == "input"),
+                         collections.Counter({"teams": len(NBA_TEAMS), "presets": 4, "join": 2,
+                                              "blow_upper": 1, "blow_lower": 1, "close_points": 1,
+                                              "close_minutes": 1, "along_points": 1, "along_share": 1,
+                                              "high_total": 1, "judge_from": 1, "freeze_at": 1}))
+
+    def test_each_preset_with_sliders_offers_its_own_reset_to_default(self):
+        setup = self.page("/?setup=1&presets=blow,high")
+        groups = dict(re.findall(r'<section class="group" data-preset="([^"]+)"[^>]*>(.*?)</section>',
+                                setup, re.S))
+        self.assertEqual(sorted(groups), ["blow", "close", "high"])
+        for key in ("blow", "close", "high"):
+            self.assertEqual([attrs["data-reset"] for tag, attrs in tags(groups[key])
+                              if "data-reset" in attrs], [key])
+
+    def test_reset_to_default_returns_to_the_shipped_values(self):
+        rows = slider_rows(self.page("/?setup=1&presets=blow,high&blow_upper=97&blow_lower=90&high_total=300"))
+        self.assertEqual([slider_input(rows[parameter][0])["data-default"]
+                          for parameter in ("blow_upper", "blow_lower", "high_total")],
+                         ["98", "95", "240"])
+
+    def test_the_overtime_warning_warns_that_a_watchs_timing_can_hint_at_overtime(self):
+        setup = self.page("/?setup=1&presets=wins")
+        warning = words(re.search(r'<p class="notice" id="overtime"[^>]*>(.*?)</p>', setup, re.S).group(1))
+        self.assertEqual(warning, "Every Preset you picked judges only the final, so if you remember when "
+                                  "the game tipped off, the time a Watch appears, or doesn't, can hint at "
+                                  "overtime.")
+
+    def test_the_overtime_warning_shows_only_when_every_picked_preset_judges_the_final(self):
+        def warning(path):
+            return next(attrs for tag, attrs in tags(self.page(path)) if attrs.get("id") == "overtime")
+        self.assertNotIn("hidden", warning("/?setup=1&presets=wins"))
+        self.assertIn("hidden", warning("/?setup=1"))
+        self.assertIn("hidden", warning("/?setup=1&presets=blow"))
+        self.assertIn("hidden", warning("/?setup=1&presets=wins,blow"))
+
+    def test_the_page_keeps_the_settings_a_request_names_on_the_phone(self):
+        remembered = script(self.page("/?teams=BOS&presets=blow&join=AND&blow_upper=97"), "function settingsQuery")
+        self.assertIn('if (params.has("presets") || params.has("join")) store(named(params));', remembered)
+
+    def test_the_settings_the_page_saves_are_the_presets_the_join_and_every_slider(self):
+        controls = self.controls()
+        self.assertIn("presets: chips.filter(chip => chip.checked).map(chip => chip.value),", controls)
+        self.assertIn('join: form.querySelector(\'input[name="join"]:checked\').value,', controls)
+        self.assertIn("values: Object.fromEntries(sliders.map(slider => [slider.name, Number(slider.value)])),",
+                      controls)
+
+    def test_the_page_saves_the_settings_the_fan_sets_on_the_phone(self):
+        controls = self.controls()
+        self.assertIn('localStorage.setItem(SETTINGS, JSON.stringify(settings()))', controls)
+
+    def test_a_slider_shows_the_word_for_its_value_as_the_fan_moves_it(self):
+        controls = self.controls()
+        self.assertIn("shown.textContent = JSON.parse(slider.dataset.labels)[slider.value];", controls)
+
+    def test_reset_to_default_puts_every_slider_in_the_preset_back_and_shows_it(self):
+        controls = self.controls()
+        self.assertRegex(controls, r'const reset = event\.target\.closest\("\[data-reset\]"\);'
+                                   r' if \(!reset\) return; for \(const slider of reset\.closest\("section"\)'
+                                   r'\.querySelectorAll\(')
+        self.assertRegex(controls, r'slider\.value = slider\.dataset\.default; showValue\(slider\);')
+
+    def test_picking_a_preset_reveals_its_sliders_and_unpicking_it_hides_them(self):
+        controls = self.controls()
+        self.assertIn("group.hidden = !picked.includes(group.dataset.preset);", controls)
+
+    def test_done_needs_a_preset_as_the_fan_picks_and_unpicks(self):
+        controls = self.controls()
+        self.assertIn("done.disabled = picked.length === 0;", controls)
+
+    def test_the_overtime_warning_follows_the_presets_the_fan_picks(self):
+        controls = self.controls()
+        self.assertIn("warning.hidden = !(picked.length && picked.every(key => finalOnly.has(key)));",
+                      controls)
+
+    def test_tapping_a_card_lists_the_presets_the_and_or_and_the_values_applied(self):
+        card = cards(self.page("/?teams=BOS&presets=blow,close&join=AND"
+                               "&blow_upper=97&close_points=4"))["BOS"]
+        self.assertEqual(card_rules(card),
+                         "No blowout losses (Stay away above 97%, Back to Watch below 95%) "
+                         "Close games (Close ending within 4 points, Close ending in the last 5 minutes, "
+                         "Close along the way within 9 points, Close along the way for over 66%) "
+                         "All must fit (AND) "
+                         "Judge from 6:00 left in the 2nd · Freeze at 5:00 left in the 4th")
+
+    def test_a_cards_rules_do_not_say_which_preset_fitted_the_game(self):
+        # BOS is Stay away and LAL is Watch under the same Preset, so their panels must read the same.
+        page = self.page("/?teams=BOS,LAL&presets=blow")
+        rules = {team: card_rules(card) for team, card in cards(page).items()}
+        self.assertEqual(rules["BOS"], rules["LAL"])
+
+    def test_a_wins_only_fan_gets_the_preset_by_name_and_the_shared_timing(self):
+        card = cards(self.page("/?teams=BOS&presets=wins"))["BOS"]
+        self.assertEqual(card_rules(card),
+                         "Wins for my team Any one fits (OR) "
+                         "Judge from 6:00 left in the 2nd · Freeze at 5:00 left in the 4th")
 
 
 @unittest.skipUnless(os.path.exists(f"{SEASON_CACHE}/schedule.json"),

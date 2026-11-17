@@ -109,13 +109,13 @@ def root_page(query, now, get):
     showing_setup = "setup" in params or not names
     try:
         if showing_setup:
-            return page.setup_screen(sorted(espn_abbreviations(get)), names)
-        return page.list_screen(judge(names, now.date(), get, fan))
+            return page.setup_screen(sorted(espn_abbreviations(get)), names, fan)
+        return page.list_screen(judge(names, now.date(), get, fan), fan)
     except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
         outage = espn_outage(error)
         if showing_setup:
-            return page.setup_screen([], names, outage)
-        return page.list_screen([row(name) for name in names], outage)
+            return page.setup_screen([], names, fan, outage)
+        return page.list_screen([row(name) for name in names], fan, outage)
 
 
 def catchup_answer(params, now, get):
