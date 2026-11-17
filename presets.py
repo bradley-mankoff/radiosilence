@@ -29,10 +29,14 @@ CLOSE = Preset("close", "Close games", (
     Slider("along_points", "Close along the way within", 9, 1, 20, "points"),
     Slider("along_share", "Close along the way for over", 66, 1, 99, "%"),
 ))
-SHIPPED = (WINS, BLOW, CLOSE)
+HIGH = Preset("high", "High-scoring games", (
+    Slider("high_total", "Reach a total of", 240, 150, 350, "points"),
+))
+SHIPPED = (WINS, BLOW, CLOSE, HIGH)
 
-# The timing sliders the Presets that judge between two moments share, in seconds played in regulation:
-# Judge from runs from tip-off to the start of the 4th; Freeze at runs over the 4th.
+# The timing sliders a Preset can read, in seconds played in regulation: Judge from runs from tip-off to
+# the start of the 4th, and Freeze at runs over the 4th. High-scoring games reads Judge from alone; only
+# the Presets that judge between two moments read both.
 JUDGE_FROM = Slider("judge_from", "Judge from", 1080, 0, 2160, "seconds elapsed")
 FREEZE_AT = Slider("freeze_at", "Freeze at", 2580, 2160, 2880, "seconds elapsed")
 TIMING = (JUDGE_FROM, FREEZE_AT)

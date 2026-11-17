@@ -146,7 +146,25 @@ def close_games(summary, abbreviation, fan):
     return FITS if close_ending or close_along_the_way else DOESNT_FIT
 
 
-PRESET_RESULTS = {"wins": wins_for_my_team, "blow": no_blowout_losses, "close": close_games}
+def high_scoring_games(summary, abbreviation, fan):
+    """Before Judge from: not yet; from then on the pace of the game so far, and after the final its total.
+
+    The pace is the header's combined score over the game time played, scaled to the 48 minutes of a
+    regulation game; the game time is the clock of the game's latest play. After the final the header's
+    own total decides on its own, overtime included.
+    """
+    header = summary["header"]
+    total = sum(int(side["score"]) for side in header["competitions"][0]["competitors"])
+    if state(header) == "post":
+        return FITS if total >= fan.value("high_total") else DOESNT_FIT
+    played = max((elapsed(play) for play in summary.get("plays", [])), default=0)
+    if not played or played < fan.value("judge_from"):  # no game time yet leaves no pace to read
+        return NOT_YET
+    return FITS if total * REGULATION / played >= fan.value("high_total") else DOESNT_FIT
+
+
+PRESET_RESULTS = {"wins": wins_for_my_team, "blow": no_blowout_losses, "close": close_games,
+                  "high": high_scoring_games}
 
 
 def combine(results, join):

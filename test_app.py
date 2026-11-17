@@ -136,6 +136,7 @@ OPPONENT = ("MIA", "Miami Heat")
 NO_BLOWOUT_LOSSES = Settings(picked=["blow"])
 WINS_FOR_MY_TEAM = Settings(picked=["wins"])
 CLOSE_GAMES = Settings(picked=["close"])
+HIGH_SCORING_GAMES = Settings(picked=["high"])
 
 
 def one_game_row(team, plays, team_at_home=False, fan=None, state="in",
@@ -408,6 +409,68 @@ class JudgingTest(unittest.TestCase):
     def test_a_late_stat_correction_at_the_end_of_the_list_is_read_in_game_time(self):
         row = one_game_row(IND, [(4, "6:00", 0.30), (2, "5:30", 0.99)], fan=NO_BLOWOUT_LOSSES)
         self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_is_too_early_before_judge_from(self):
+        # 136 combined points 1079 seconds in is a 363-point pace, well over the line, but 6:00 in the 2nd
+        # is one second away, so the Preset has not started reading.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:00", 30, 25), (2, "6:01", 70, 66)],
+                              fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Too early to call")
+
+    def test_high_scoring_games_reads_at_judge_from(self):
+        # The same 363-point pace at exactly 6:00 in the 2nd is at Judge from, where the Preset starts reading.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:00", 30, 25), (2, "6:00", 70, 66)],
+                              fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_is_too_early_with_no_game_time_played(self):
+        # A fan who moved Judge from to tip-off, with only the 0-0 opening play, has no game time to pace.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0)],
+                              fan=Settings(picked=["high"], values={"judge_from": 0}))
+        self.assertEqual(row["verdict"], "Too early to call")
+
+    def test_high_scoring_games_watches_a_fast_pace(self):
+        # 130 combined points with 24:00 played is a 260-point pace, over the 240 line.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "6:00", 30, 25), (2, "12:00", 60, 55),
+                                    (3, "12:00", 70, 60)], fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_stays_away_from_a_slow_pace(self):
+        # 119 combined points with 24:00 played is a 238-point pace, under the 240 line.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "6:00", 30, 25), (2, "12:00", 60, 55),
+                                    (3, "12:00", 70, 49)], fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_high_scoring_games_counts_the_line_itself_as_reached(self):
+        # 120 combined points with 24:00 played is exactly a 240-point pace.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "6:00", 30, 25), (2, "12:00", 60, 55),
+                                    (3, "12:00", 70, 50)], fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_reads_the_pace_over_all_the_game_time_played(self):
+        # 130 points with 24:00 played is a 260-point pace, but the game ran on scoreless to 30:00, so the
+        # 130 points came in a 208-point pace over every minute played.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "6:00", 30, 25), (2, "12:00", 60, 55),
+                                    (3, "12:00", 70, 60), (3, "6:00", 70, 60)], fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
+
+    def test_high_scoring_games_reads_the_score_from_the_header(self):
+        # These plays carry no score of their own, so the header's total is the one the pace is read from:
+        # 130 points with 24:00 played is a 260-point pace.
+        row = one_game_row(DAL, [(1, "12:00", 0.5), (3, "12:00", 0.5)], fan=HIGH_SCORING_GAMES,
+                           team_at_home=True, team_score="70", opponent_score="60")
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_judges_a_finished_game_by_its_final_total(self):
+        # 250 points over 53 minutes of overtime is a 226-point pace, but the final total reaches 240.
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (4, "0:00", 110, 110), (5, "0:00", 125, 125)],
+                              state="post", fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Watch")
+
+    def test_high_scoring_games_stays_away_from_a_final_total_under_the_line(self):
+        row = scored_game_row(DAL, [(1, "12:00", 0, 0), (4, "0:00", 105, 100)],
+                              state="post", fan=HIGH_SCORING_GAMES)
+        self.assertEqual(row["verdict"], "Stay away")
 
     def test_close_games_stays_away_from_a_blowout_win(self):
         row = scored_game_row(DAL, [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 55, 25),
@@ -748,7 +811,7 @@ class PresetsResponseTest(unittest.TestCase):
         self.assertEqual(content_type, JSON_TYPE)
         answer = json.loads(body)
         self.assertEqual([preset["name"] for preset in answer["presets"]],
-                         ["Wins for my team", "No blowout losses", "Close games"])
+                         ["Wins for my team", "No blowout losses", "Close games", "High-scoring games"])
         self.assertEqual(answer["presets"][0], {"key": "wins", "name": "Wins for my team", "sliders": []})
         self.assertEqual(answer["presets"][1]["sliders"], [
             {"parameter": "blow_upper", "name": "Stay away above",
@@ -766,6 +829,10 @@ class PresetsResponseTest(unittest.TestCase):
             {"parameter": "along_share", "name": "Close along the way for over",
              "min": 1, "max": 99, "default": 66, "unit": "%"},
         ])
+        self.assertEqual(answer["presets"][3], {"key": "high", "name": "High-scoring games", "sliders": [
+            {"parameter": "high_total", "name": "Reach a total of",
+             "min": 150, "max": 350, "default": 240, "unit": "points"},
+        ]})
         self.assertEqual([slider["parameter"] for slider in answer["shared"]], ["judge_from", "freeze_at"])
         self.assertEqual([slider["default"] for slider in answer["shared"]], [1080, 2580])
 
@@ -803,12 +870,12 @@ class PresetSettingsTest(unittest.TestCase):
         self.assertEqual(self.blow_row([(3, "8:00", upper / 100)])["verdict"], "Watch")
         self.assertEqual(self.blow_row([(3, "8:00", (upper + 1) / 100)])["verdict"], "Stay away")
 
-    def close_row(self, plays, query=""):
-        """The DAL row for one live home game against Miami, judged from the query's Preset settings.
+    def preset_row(self, preset, plays, query=""):
+        """The DAL row for one live home game against Miami, judged from `preset` and the query's settings.
 
         plays is a list of (period, clock, Dallas score, Miami score).
         """
-        status, content_type, body = respond(f"/rows?teams=DAL&presets=close{query}", NOW,
+        status, content_type, body = respond(f"/rows?teams=DAL&presets={preset}{query}", NOW,
                                              espn(scored_responses(DAL, plays)))
         self.assertEqual(status, 200)
         return json.loads(body)["rows"][0]
@@ -818,8 +885,14 @@ class PresetSettingsTest(unittest.TestCase):
         plays = [(1, "12:00", 0, 0), (1, "11:50", 10, 2), (2, "12:00", 50, 20),
                  (3, "12:00", 80, 50), (4, "12:00", 100, 70), (4, "4:30", 107, 100),
                  (4, "4:00", 109, 102)]
-        self.assertEqual(self.close_row(plays)["verdict"], "Stay away")
-        self.assertEqual(self.close_row(plays, "&close_points=7")["verdict"], "Watch")
+        self.assertEqual(self.preset_row("close", plays)["verdict"], "Stay away")
+        self.assertEqual(self.preset_row("close", plays, "&close_points=7")["verdict"], "Watch")
+
+    def test_a_high_scoring_games_slider_moves_the_verdict(self):
+        # 130 combined points with 24:00 played is a 260-point pace: over the shipped 240, under a fan's 270.
+        plays = [(1, "12:00", 0, 0), (1, "6:00", 30, 25), (2, "12:00", 60, 55), (3, "12:00", 70, 60)]
+        self.assertEqual(self.preset_row("high", plays)["verdict"], "Watch")
+        self.assertEqual(self.preset_row("high", plays, "&high_total=270")["verdict"], "Stay away")
 
 
 class Tags(HTMLParser):
@@ -1076,6 +1149,16 @@ class SeasonReplayTest(unittest.TestCase):
                     for _, _, day, answers in games]
         self.assertEqual(len(games), 82)
         self.assertEqual(verdicts.count("Watch"), 51)
+
+    def test_high_scoring_games_marks_28_of_the_82_games_at_240(self):
+        games = cached_season()
+        verdicts = [judge(["DAL"], day, answers.__getitem__, HIGH_SCORING_GAMES)[0]["verdict"]
+                    for _, _, day, answers in games]
+        watched = verdicts.count("Watch")
+        print(f"\nhigh-scoring games at 240 marks {watched} of the {len(verdicts)} cached 2025-26 games "
+              f"({watched / len(verdicts):.0%} of them)")
+        self.assertEqual(len(games), 82)
+        self.assertEqual(watched, 28)
 
     def test_close_games_watches_every_game_decided_by_5_or_fewer(self):
         missed = []
