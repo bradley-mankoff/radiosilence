@@ -3,10 +3,11 @@ from behind.
 
 The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
 judging.py works out each team's row from ESPN's public JSON and the fan's settings; catchup.py rebuilds
-the score, box score and plays as of the moment the fan names; page.py turns the rows into the page; and
-this file serves them all, sharing ESPN answers for a short while. Only the catch-up answer carries a
-score, clock or quarter, and only for the plays at or before the moment the fan names: every other answer
-holds no score, clock, quarter, win-probability percentage, or a started game's tip-off time.
+the score, box score and plays as of the moment the fan names; page.py turns the rows into the list and
+the catch-up answer into the catch-up screen; and this file serves them all, sharing ESPN answers for a
+short while. Only the catch-up answer and screen carry a score, clock or quarter, and only for the plays
+at or before the moment the fan names: every other answer holds no score, clock, quarter, win-probability
+percentage, or a started game's tip-off time.
 """
 
 import json
@@ -22,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import page
 import presets
-from catchup import catch_up
+from catchup import TIP_OFF, catch_up, moment_seconds
 from judging import (ESPN, TEAM_LIST, espn_abbreviation, espn_abbreviations, judge, row,
                      start_time, started_game)
 
@@ -102,10 +103,75 @@ def teams_and_fan(params):
     return named_teams(params.get("teams", [])), presets.from_query(params)
 
 
+class NoGame(Exception):
+    """A catch-up request with no game to show: no such team, or no started game on the Game day."""
+
+
+def game_id_and_summary(names, now, get):
+    """ESPN's id for the started game on the Game day of the first of `names` that has one, and its
+    summary.
+
+    Raises NoGame with the phone's words when no name is an NBA team or none has a started game.
+    """
+    known = espn_abbreviations(get)
+    abbreviations = [espn_abbreviation(name, known) for name in names]
+    if not any(abbreviations):
+        raise NoGame("ESPN doesn't list an NBA team by that name.")
+    day = now.date()
+    games = get(f"{ESPN}/scoreboard?dates={day:%Y%m%d}")
+    today_games = [event for event in games["events"] if start_time(event).date() == day]
+    game = next((started_game(today_games, abbreviation)
+                 for abbreviation in abbreviations if abbreviation), None)
+    if game is None:
+        raise NoGame("That team has no started game on the Game day.")
+    return game["id"], get(f"{ESPN}/summary?event={game['id']}")
+
+
+def named_moment(params):
+    """The period, minutes and seconds a request names, or None when it names no three numbers."""
+    try:
+        return params["period"][0], int(params["minutes"][0]), int(params["seconds"][0])
+    except (KeyError, ValueError):
+        return None
+
+
+def picked_moment(params):
+    """The moment a catch-up screen's pickers name, or Tip-off when the request names none or names a
+    moment no clock has."""
+    moment = named_moment(params)
+    if moment is None:
+        return TIP_OFF
+    try:
+        # The call only asks whether a clock has this moment; the screen names the moment itself.
+        moment_seconds(*moment)
+    except ValueError:
+        return TIP_OFF
+    return moment
+
+
+def catchup_page(team, params, names, fan, now, get):
+    """The catch-up screen for `team`'s game, at the moment the request's pickers name and on the tab it
+    asks for, or the words for why the team has no game to show and the way back to the list."""
+    teams = names or [team]
+    moment = picked_moment(params)
+    tab = page.catchup_tab(params.get("tab", [""])[0])
+    try:
+        game_id, summary = game_id_and_summary([team], now, get)
+    except NoGame as error:
+        return page.catchup_notice(teams, fan, str(error))
+    except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
+        return page.catchup_notice(teams, fan, espn_outage(error))
+    return page.catchup_screen(team, teams, fan, game_id, catch_up(summary, *moment), moment, tab)
+
+
 def root_page(query, now, get):
-    """The page at `/` for `query`: team setup, or the list of cards for the teams it names."""
+    """The page at `/` for `query`: team setup, the list of cards for the teams it names, or the catch-up
+    screen of the team it names."""
     params = parse_qs(query)
     names, fan = teams_and_fan(params)
+    catchup_team = params.get("catchup", [""])[0].strip().upper()
+    if catchup_team:
+        return catchup_page(catchup_team, params, names, fan, now, get)
     showing_setup = "setup" in params or not names
     try:
         if showing_setup:
@@ -127,26 +193,15 @@ def catchup_answer(params, now, get):
     that has started on the Game day has a catch-up answer.
     """
     names = named_teams(params.get("teams", []))
-    try:
-        period = params["period"][0]
-        minutes = int(params["minutes"][0])
-        seconds = int(params["seconds"][0])
-    except (KeyError, ValueError):
+    moment = named_moment(params)
+    if moment is None:
         return json_answer(400, {"error": "Name a period, minutes and seconds."})
-    known = espn_abbreviations(get)
-    abbreviations = [espn_abbreviation(name, known) for name in names]
-    if not any(abbreviations):
-        return json_answer(404, {"error": "ESPN doesn't list an NBA team by that name."})
-    day = now.date()
-    games = get(f"{ESPN}/scoreboard?dates={day:%Y%m%d}")
-    today_games = [event for event in games["events"] if start_time(event).date() == day]
-    game = next((started_game(today_games, abbreviation)
-                 for abbreviation in abbreviations if abbreviation), None)
-    if game is None:
-        return json_answer(404, {"error": "That team has no started game on the Game day."})
-    summary = get(f"{ESPN}/summary?event={game['id']}")
     try:
-        return json_answer(200, catch_up(summary, period, minutes, seconds))
+        _, summary = game_id_and_summary(names, now, get)
+    except NoGame as error:
+        return json_answer(404, {"error": str(error)})
+    try:
+        return json_answer(200, catch_up(summary, *moment))
     except ValueError as error:
         return json_answer(400, {"error": str(error)})
 

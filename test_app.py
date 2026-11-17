@@ -8,6 +8,7 @@ import unittest
 import urllib.error
 from datetime import date, datetime
 from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 # Expected times below are Dallas local time.
 os.environ["TZ"] = "America/Chicago"
@@ -284,6 +285,8 @@ def substitution_game():
         game_play("sub1", 1, "6:00", DAL_ID, "Substitution",
                   "Naji Marshall enters the game for Luka Doncic", "Substitution", ("d6", "d1")),
         game_play("q1-end", 1, "0:00", None, "End Period", "End of the 1st Quarter", "End of 1st"),
+        game_play("q2-tip", 2, "12:00", DAL_ID, "Jumpball",
+                  "Jump ball to start the 2nd", "Jump Ball", ("d3", "b1")),
         game_play("sub2", 2, "9:00", DAL_ID, "Substitution",
                   "Luka Doncic enters the game for Naji Marshall", "Substitution", ("d1", "d6")),
         game_play("q2-end", 2, "0:00", None, "End Period", "End of the 2nd Quarter", "End of 2nd"),
@@ -308,6 +311,8 @@ def overtime_game():
         game_play("q4", 4, "12:00", DAL_ID, "Jumpball", "Jump ball to start the 4th", "Jump Ball",
                   ("d3", "b1")),
         game_play("reg", 4, "0:00", None, "End Period", "End of the 4th Quarter", "End of 4th"),
+        game_play("ot-tip", 5, "5:00", DAL_ID, "Jumpball",
+                  "Jump ball to start overtime", "Jump Ball", ("d3", "b1")),
         game_play("ot1", 5, "4:30", DAL_ID, "Driving Layup Shot",
                   "Luka Doncic makes driving layup", "+2 Points", ("d1",),
                   scoring=True, score=2, shooting=True),
@@ -323,6 +328,23 @@ def overtime_game():
                   "Luka Doncic makes 25-foot three point jumper", "+3 Points", ("d1",),
                   scoring=True, score=3, shooting=True, attempted=3),
         game_play("end3", 7, "0:00", None, "End Period", "End of the 3rd OT", "End of 3rd OT"),
+        game_play("over", 7, "0:00", None, "End Game", "End of Game", "End of Game"),
+    ]
+    return game
+
+
+def regulation_end_game():
+    """A hand-built game that ended in regulation: a 4th-quarter shot, then ESPN's whistle at the end
+    of the 4th and its end-of-game marker."""
+    game = handmade_game()
+    game["plays"] = [
+        game_play("q4", 4, "12:00", DAL_ID, "Jumpball", "Jump ball to start the 4th", "Jump Ball",
+                  ("d3", "b1")),
+        game_play("shot", 4, "0:30", DAL_ID, "Driving Layup Shot",
+                  "Luka Doncic makes driving layup", "+2 Points", ("d1",),
+                  scoring=True, score=2, shooting=True),
+        game_play("reg", 4, "0:00", None, "End Period", "End of the 4th Quarter", "End of 4th"),
+        game_play("over", 4, "0:00", None, "End Game", "End of Game", "End of Game"),
     ]
     return game
 
@@ -743,12 +765,40 @@ class CatchUpAnswerTest(unittest.TestCase):
             {"id": "b2", "name": "Jaylen Brown", "team": "BOS", "minutes": 12.0, **line(steals=1)},
         ])
 
-    def test_a_quarter_break_play_list_runs_from_the_period_whistle_back_to_tip_off(self):
+    def test_a_quarter_break_play_list_runs_from_the_last_play_back_to_tip_off(self):
         answer = catch_up(handmade_game(), "1st", 0, 0)
         self.assertEqual([play["id"] for play in answer["plays"]],
-                         ["p10", "p8", "p9", "p7", "p6", "p5", "p4", "p3", "p2", "p1"])
+                         ["p8", "p9", "p7", "p6", "p5", "p4", "p3", "p2", "p1"])
         self.assertEqual(answer["plays"][0],
-                         expected_play("p10", "1st Quarter", "0:00", None, "End of the 1st Quarter"))
+                         expected_play("p8", "1st Quarter", "9:00", "BOS",
+                                       "Jayson Tatum makes free throw 1 of 2"))
+
+    def test_an_end_of_regulation_answer_holds_no_play_from_overtime(self):
+        # Overtime's opening tip happened at 5:00 of the 1st OT, the same instant of game time as the 4th
+        # quarter's 0:00. Sending it would tell a fan at the end of regulation that an overtime followed.
+        plays = catch_up(overtime_game(), "4th", 0, 0)["plays"]
+        self.assertEqual([play["id"] for play in plays], ["q4"])
+        self.assertEqual({play["period"] for play in plays}, {"4th Quarter"})
+
+    def test_a_quarter_break_answer_holds_no_play_from_the_next_quarter(self):
+        # The 2nd quarter opens at 12:00, the same instant of game time as the 1st quarter's 0:00, so a
+        # fan at the break must not see the next quarter's opening play.
+        plays = catch_up(substitution_game(), "1st", 0, 0)["plays"]
+        self.assertEqual([play["id"] for play in plays], ["sub1"])
+        self.assertEqual({play["period"] for play in plays}, {"1st Quarter"})
+
+    def test_a_play_list_never_carries_espns_end_of_game_markers(self):
+        # At the end of regulation, "End of the 4th Quarter" followed by "End of Game" would tell a fan
+        # the game was over, and so that no overtime came. The answer leaves both out.
+        plays = catch_up(regulation_end_game(), "4th", 0, 0)["plays"]
+        self.assertEqual([play["id"] for play in plays], ["shot", "q4"])
+
+    def test_an_overtime_play_list_never_carries_espns_end_of_game_markers(self):
+        # The same at the end of overtime: the end of the 4th, each overtime's end and the game's end are
+        # all markers, and a fan who only reached the 4th's end must not learn an overtime followed.
+        plays = catch_up(overtime_game(), "OT", 14, 0)["plays"]
+        self.assertEqual([play["id"] for play in plays],
+                         ["ot3", "ot2-late", "ot2", "ot1", "ot-tip", "q4"])
 
     def test_a_made_heave_counts_as_an_attempt_but_a_missed_one_does_not(self):
         game = handmade_game()
@@ -781,14 +831,13 @@ class CatchUpAnswerTest(unittest.TestCase):
 
     def test_nine_minutes_of_overtime_is_four_minutes_into_the_second_overtime(self):
         answer = catch_up(overtime_game(), "OT", 9, 0)
-        self.assertEqual([play["id"] for play in answer["plays"]],
-                         ["ot2", "end1", "ot1", "reg", "q4"])
+        self.assertEqual([play["id"] for play in answer["plays"]], ["ot2", "ot1", "ot-tip", "q4"])
         self.assertEqual(answer["score"], {"home": 2, "away": 2})
 
     def test_fourteen_minutes_of_overtime_is_four_minutes_into_the_third_overtime(self):
         answer = catch_up(overtime_game(), "OT", 14, 0)
         self.assertEqual([play["id"] for play in answer["plays"]],
-                         ["ot3", "end2", "ot2-late", "ot2", "end1", "ot1", "reg", "q4"])
+                         ["ot3", "ot2-late", "ot2", "ot1", "ot-tip", "q4"])
         self.assertEqual(answer["score"], {"home": 5, "away": 4})
 
     def test_an_overtime_moment_in_a_regulation_game_is_the_whole_game(self):
@@ -797,7 +846,19 @@ class CatchUpAnswerTest(unittest.TestCase):
         self.assertEqual(overtime_moment, end_of_regulation)
         self.assertEqual(set(overtime_moment), {"score", "teams", "players", "plays"})
         self.assertEqual(overtime_moment["score"], {"home": 2, "away": 3})
-        self.assertEqual(len(overtime_moment["plays"]), 10)
+        self.assertEqual(len(overtime_moment["plays"]), 9)
+
+    def test_a_catch_up_answer_at_the_end_of_regulation_sends_no_overtime_play(self):
+        # The phone reads the answer, not the screen built from it, so no overtime word may reach it.
+        responses = {
+            SCOREBOARD: {"events": [event("catchup", "2026-10-23T23:10Z", "in", (DAL, "2"), (BOS, "2"))]},
+            CATCHUP_URL: overtime_game(),
+        }
+        status, content_type, body = respond(
+            "/catchup?teams=DAL&period=4th&minutes=0&seconds=0", NOW, espn(responses))
+        self.assertEqual(status, 200)
+        for overtime in ["OT", "Jump ball to start overtime"]:
+            self.assertNotIn(overtime, body.decode(), overtime)
 
     def test_a_catch_up_request_sends_nothing_after_the_moment(self):
         summary = handmade_game()
@@ -1184,6 +1245,236 @@ class PageTest(PageServing):
                         "98%", "95%", "0.99", "0.6234", "0.01", "1st", "2nd", "3rd", "4th",
                         "12:00 PM", "6:10 PM", "5:40 PM", "overtime", "final"]:
             self.assertNotIn(spoiler, outside_rules, spoiler)
+
+
+def scores(page):
+    """The catch-up screen's score, each side as '2 DAL' in the answer's order."""
+    return [words(cell) for cell in re.findall(r'<span class="team-score">(.*?)</span>', page, re.S)]
+
+
+def box_rows(page):
+    """The catch-up screen's box score rows, each as its list of cell words."""
+    return [[words(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>", page, re.S) if "<td" in row]
+
+
+def play_rows(page):
+    """The catch-up screen's plays, each as (its period, clock and team, its text), in the order shown."""
+    return [(words(moment), words(text)) for moment, text in
+            re.findall(r"<div><b>(.*?)</b>(.*?)</div>", page, re.S)]
+
+
+def picker(page, name):
+    """One of the catch-up screen's pickers: every option value it offers, in order."""
+    markup = re.search(rf'<select name="{name}"[^>]*>(.*?)</select>', page, re.S).group(1)
+    return [attrs["value"] for tag, attrs in tags(markup)]
+
+
+def picked(page, name):
+    """The value one of the catch-up screen's pickers shows as picked."""
+    markup = re.search(rf'<select name="{name}"[^>]*>(.*?)</select>', page, re.S).group(1)
+    return next(attrs["value"] for tag, attrs in tags(markup) if "selected" in attrs)
+
+
+def screen_espn(game=None):
+    """ESPN's answers for one started Dallas-Boston game on the test's Game day, as the catch-up screen
+    asks for them."""
+    return {
+        SCOREBOARD: {"events": [event("screen", "2026-10-23T23:10Z", "in", (DAL, "2"), (BOS, "3"))]},
+        f"{ESPN}/summary?event=screen": game or handmade_game(),
+    }
+
+
+class CatchUpScreenTest(PageServing):
+    """The catch-up screen seam: the page respond serves for a catch-up path on the test's Game day."""
+
+    def screen(self, game=None, **params):
+        """The catch-up screen for Dallas' game with Boston, at the moment and tab `params` name."""
+        return self.page("/?" + urlencode([("catchup", "DAL"), ("teams", "DAL,BOS")]
+                                          + list(params.items())), get=espn(screen_espn(game)))
+
+    def test_every_card_opens_the_catch_up_screen_for_its_own_team(self):
+        page = self.page("/?teams=LAL,BOS,IND,DAL&presets=blow")
+        watched = {team: next(attrs["href"] for tag, attrs in tags(card)
+                              if attrs.get("class") == "watching")
+                   for team, card in cards(page).items()}
+        queries = {team: parse_qs(urlsplit(href).query) for team, href in watched.items()}
+        self.assertEqual({team: query["catchup"] for team, query in queries.items()},
+                         {team: [team] for team in ["LAL", "BOS", "IND", "DAL"]})
+        self.assertEqual({tuple(query["teams"]) for query in queries.values()},
+                         {("LAL", "BOS", "IND", "DAL")})
+
+    def test_each_cards_watching_button_says_im_watching(self):
+        page = self.page("/?teams=DAL&presets=blow")
+        self.assertIn("I'm watching", words(cards(page)["DAL"]))
+
+    def test_a_cards_watching_link_opens_its_game_at_the_first_moment(self):
+        get = espn(screen_espn())
+        card = cards(self.page("/?teams=DAL&presets=blow", get=get))["DAL"]
+        link = next(attrs["href"] for tag, attrs in tags(card) if attrs.get("class") == "watching")
+        self.assertEqual(scores(self.page(link, get=get)), ["0 DAL", "0 BOS"])
+
+    def test_a_named_moment_shows_the_score_at_that_moment(self):
+        page = self.screen(period="1st", minutes=10, seconds=0)
+        self.assertEqual(scores(page), ["2 DAL", "2 BOS"])
+
+    def test_the_box_score_tab_shows_each_players_line_and_the_team_totals(self):
+        rows = box_rows(self.screen(period="1st", minutes=10, seconds=0))
+        self.assertIn(["Luka Doncic", "2:00", "2", "0", "0", "0", "1/1", "0/0", "0/0"], rows)
+        self.assertIn(["DAL", "—", "2", "1", "1", "0", "1/1", "0/0", "0/0"], rows)
+        self.assertIn(["BOS", "—", "2", "0", "0", "0", "1/2", "0/1", "0/0"], rows)
+
+    def test_the_box_score_prints_each_players_minutes_as_minutes_and_seconds(self):
+        # 2:40 played is 2.67 minutes; a box score prints the clock, not the decimal.
+        rows = {row[0]: row for row in box_rows(self.screen(period="1st", minutes=9, seconds=20))}
+        self.assertEqual(rows["Luka Doncic"][1], "2:40")
+
+    def test_the_play_by_play_tab_lists_the_plays_up_to_the_moment_newest_first(self):
+        page = self.screen(period="1st", minutes=10, seconds=0, tab="plays")
+        self.assertEqual(play_rows(page), [
+            ("1st Quarter 10:10 · BOS", "Jayson Tatum makes driving layup"),
+            ("1st Quarter 10:30 · DAL", "Dereck Lively II offensive rebound"),
+            ("1st Quarter 11:05 · BOS", "Jayson Tatum misses 25-foot three point jumper"),
+            ("1st Quarter 11:40 · DAL", "Luka Doncic makes 18-foot jump shot (Kyrie Irving assists)"),
+            ("1st Quarter 12:00 · DAL",
+             "Dereck Lively II vs. Jayson Tatum (Luka Doncic gains possession)"),
+        ])
+
+    def test_the_play_by_play_tab_prints_no_end_of_game_marker_for_a_regulation_game(self):
+        page = self.screen(game=regulation_end_game(), period="4th", minutes=0, seconds=0, tab="plays")
+        self.assertEqual(play_rows(page), [
+            ("4th Quarter 0:30 · DAL", "Luka Doncic makes driving layup"),
+            ("4th Quarter 12:00 · DAL", "Jump ball to start the 4th"),
+        ])
+        for marker in ["End of the 4th Quarter", "End of Game"]:
+            self.assertNotIn(marker, page, marker)
+
+    def test_the_play_by_play_tab_prints_no_end_of_game_marker_for_an_overtime_game(self):
+        page = self.screen(game=overtime_game(), period="OT", minutes=14, seconds=0, tab="plays")
+        self.assertEqual([text for _, text in play_rows(page)], [
+            "Luka Doncic makes 25-foot three point jumper",
+            "Jayson Tatum makes 21-foot jumper",
+            "Jayson Tatum makes 20-foot jumper",
+            "Luka Doncic makes driving layup",
+            "Jump ball to start overtime",
+            "Jump ball to start the 4th",
+        ])
+        for marker in ["End of the 4th Quarter", "End of the 1st OT", "End of the 2nd OT",
+                       "End of the 3rd OT", "End of Game"]:
+            self.assertNotIn(marker, page, marker)
+
+    def test_the_play_by_play_tab_at_the_end_of_regulation_prints_no_overtime_play(self):
+        # Overtime's opening tip shares the 4th quarter's 0:00, so its label and text must not reach the
+        # screen at the end of regulation, where they would tell a fan an overtime followed.
+        page = self.screen(game=overtime_game(), period="4th", minutes=0, seconds=0, tab="plays")
+        self.assertEqual(play_rows(page),
+                         [("4th Quarter 12:00 · DAL", "Jump ball to start the 4th")])
+        self.assertNotIn("OT 5:00", page)
+        self.assertNotIn("Jump ball to start overtime", page)
+
+    def test_the_play_by_play_tab_at_a_quarter_break_prints_no_play_from_the_next_quarter(self):
+        page = self.screen(game=substitution_game(), period="1st", minutes=0, seconds=0, tab="plays")
+        self.assertEqual(play_rows(page),
+                         [("1st Quarter 6:00 · DAL",
+                           "Naji Marshall enters the game for Luka Doncic")])
+        self.assertNotIn("2nd Quarter 12:00", page)
+        self.assertNotIn("Jump ball to start the 2nd", page)
+
+    def test_the_screen_sends_nothing_from_after_the_moment(self):
+        page = self.screen(period="1st", minutes=10, seconds=0, tab="plays")
+        for spoiler in ["Luka Doncic bad pass turnover", "Dereck Lively II shooting foul",
+                        "Jayson Tatum makes free throw 1 of 2", "End of the 1st Quarter"]:
+            self.assertNotIn(spoiler, page, spoiler)
+
+    def test_the_screen_says_it_shows_the_game_as_of_the_moment_and_nothing_later(self):
+        page = self.screen(period="1st", minutes=10, seconds=0)
+        self.assertIn("Showing the game as of 10:00 left in the 1st quarter. "
+                      "Nothing later is sent to your phone.", words(page))
+
+    def test_the_pickers_form_asks_the_server_for_the_page_screen(self):
+        form = re.search(r'<form id="catchup".*?</form>',
+                         self.screen(period="1st", minutes=10, seconds=0), re.S).group(0)
+        self.assertEqual(re.search(r"<form[^>]*>", form).group(0),
+                         '<form id="catchup" method="get" action="/">')
+
+    def test_the_pickers_form_carries_the_team_the_list_and_the_fans_settings(self):
+        form = re.search(r'<form id="catchup".*?</form>',
+                         self.screen(period="1st", minutes=10, seconds=0), re.S).group(0)
+        self.assertEqual(collections.Counter(attrs.get("name") for tag, attrs in tags(form)
+                                             if tag in ("input", "select")),
+                         collections.Counter(["catchup", "teams", "tab",
+                                              "presets", "join", "judge_from", "freeze_at",
+                                              "blow_upper", "blow_lower", "close_points", "close_minutes",
+                                              "along_points", "along_share", "high_total",
+                                              "period", "minutes", "seconds"]))
+        self.assertEqual(next(attrs["value"] for tag, attrs in tags(form)
+                              if attrs.get("name") == "teams"), "DAL,BOS")
+
+    def test_moving_a_picker_asks_the_server_for_the_new_moment(self):
+        controls = script(self.screen(period="1st", minutes=10, seconds=0), "radiosilence.catchup")
+        self.assertIn('picker.addEventListener("change", function () {', controls)
+        self.assertIn("form.submit();", controls)
+
+    def test_the_tab_links_mark_the_one_shown_and_keep_the_moment(self):
+        page = self.screen(game=overtime_game(), period="OT", minutes=9, seconds=30, tab="plays")
+        box, plays = [attrs for tag, attrs in tags(page)
+                      if tag == "a" and "pick" in attrs.get("class", "")]
+        self.assertEqual((box["class"], plays["class"]), ("pick", "pick on"))
+        query = parse_qs(urlsplit(box["href"]).query)
+        self.assertEqual((query["period"], query["minutes"], query["seconds"], query["tab"]),
+                         (["OT"], ["9"], ["30"], ["box"]))
+
+    def test_the_period_picker_offers_the_same_five_periods_whatever_the_game(self):
+        # The Bead's list, read on a regulation game at tip-off and on a three-overtime game in overtime.
+        regulation = picker(self.screen(period="1st", minutes=10, seconds=0), "period")
+        overtime = picker(self.screen(game=overtime_game(), period="OT", minutes=9, seconds=0), "period")
+        self.assertEqual((regulation, overtime), (["1st", "2nd", "3rd", "4th", "OT"],
+                                                  ["1st", "2nd", "3rd", "4th", "OT"]))
+
+    def test_the_overtime_minutes_picker_runs_from_0_to_50(self):
+        page = self.screen(game=overtime_game(), period="OT", minutes=9, seconds=0)
+        self.assertEqual(picker(page, "minutes"), [str(minute) for minute in range(51)])
+
+    def test_the_minutes_picker_runs_from_12_to_0_in_a_quarter(self):
+        page = self.screen(period="3rd", minutes=4, seconds=12)
+        self.assertEqual(picker(page, "minutes"), [str(minute) for minute in range(12, -1, -1)])
+
+    def test_the_seconds_picker_runs_from_0_to_59(self):
+        page = self.screen(period="3rd", minutes=4, seconds=12)
+        self.assertEqual(picker(page, "seconds"), [str(second) for second in range(60)])
+
+    def test_the_pickers_mark_the_moment_the_request_names(self):
+        page = self.screen(game=overtime_game(), period="OT", minutes=9, seconds=30)
+        self.assertEqual([picked(page, name) for name in ("period", "minutes", "seconds")],
+                         ["OT", "9", "30"])
+
+    def test_the_screen_remembers_the_moment_per_game_on_the_phone(self):
+        controls = script(self.screen(period="1st", minutes=10, seconds=0), "radiosilence.catchup")
+        self.assertIn('const KEY = "radiosilence.catchup.screen";', controls)
+        self.assertIn("localStorage.setItem(KEY, JSON.stringify(moment))", controls)
+        self.assertIn("JSON.parse(localStorage.getItem(KEY))", controls)
+        self.assertIn('location.replace("?" + asked)', controls)
+
+    def test_a_team_with_no_started_game_gets_the_words_and_back(self):
+        page = self.page("/?catchup=DAL&teams=DAL", get=espn(night()))
+        self.assertIn("That team has no started game on the Game day.", words(page))
+        self.assertIn("Back", words(page))
+
+    def test_the_screen_says_plainly_when_espn_cannot_be_reached(self):
+        def offline(url):
+            raise urllib.error.URLError("offline")
+        page = self.page("/?catchup=DAL&teams=DAL", get=offline)
+        self.assertIn("Couldn't reach ESPN (URLError).", words(page))
+        self.assertIn("Back", words(page))
+
+    def test_back_returns_to_the_list_with_the_fans_teams_and_settings(self):
+        page = self.screen(period="1st", minutes=10, seconds=0, presets="blow,close", join="AND")
+        back = next(attrs for tag, attrs in tags(page) if tag == "a" and attrs.get("class") == "btn")
+        self.assertIn("Back", words(page))
+        query = parse_qs(urlsplit(back["href"]).query)
+        self.assertEqual(query["teams"], ["DAL", "BOS"])
+        self.assertEqual(query["presets"], ["blow,close"])
+        self.assertEqual(query["join"], ["AND"])
 
 
 SEASON_CACHE = "/tmp/bgw-season-2026"

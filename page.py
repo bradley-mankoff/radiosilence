@@ -1,15 +1,20 @@
-"""The RadioSilence page: setup with the fan's teams and Presets, then one card per followed team.
+"""The RadioSilence page: setup with the fan's teams and Presets, one card per followed team, and the
+catch-up screen a card opens.
 
-app.py builds this page from the same rows /rows answers with, so the page can only show what the Verdict
-needs. The small scripts do what the server cannot: keep the fan's teams and Preset settings on the phone,
-send them back on the next visit, and show each slider's value as the fan moves it. The Presets, their
-sliders and their words all come from presets.py, so the page and the Verdict read one definition.
+app.py builds this page from the same rows /rows answers with, so a list can only show what the Verdict
+needs; the catch-up screen is the one screen that shows a game's score and plays, and only those at or
+before the moment the fan names. The small scripts do what the server cannot: keep the fan's teams, Preset
+settings and each game's catch-up moment on the phone, send them back on the next visit, and show each
+slider's value as the fan moves it. The Presets, their sliders and their words all come from presets.py,
+and the catch-up periods from catchup.py, so the page and the answers read one definition.
 """
 
 import json
+from collections import namedtuple
 from html import escape
 from urllib.parse import urlencode
 
+import catchup
 import presets
 
 NAME = "RadioSilence"
@@ -39,6 +44,8 @@ STYLE = """
   .pick input { position:absolute; opacity:0; pointer-events:none; }
   .pick:has(input:checked) { background:var(--ink); color:var(--bg); border-color:var(--ink); }
   .pick:has(input:focus-visible) { outline:2px solid var(--early); outline-offset:2px; }
+  .pick.on { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+  a.pick { text-decoration:none; }
   .btn { display:block; width:calc(100% - 36px); margin:10px 18px; padding:14px; border-radius:12px;
          border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:1rem;
          text-align:center; text-decoration:none; }
@@ -53,7 +60,10 @@ STYLE = """
   .card .rules { margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
                  font-size:.85rem; line-height:1.6; color:var(--dim); }
   .card .rules p { margin:0 0 4px; }
-  .card > button { grid-column:2; grid-row:1; }
+  .card .actions { grid-column:2; grid-row:1; display:flex; flex-direction:column; gap:6px; }
+  .watching { border:1px solid var(--line); background:var(--ink); color:var(--bg); border-radius:999px;
+              padding:8px 10px; font-size:.85rem; text-align:center; text-decoration:none;
+              white-space:nowrap; }
   .highlights { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:999px;
                 padding:8px 10px; font-size:.85rem; }
   .highlights:disabled { opacity:.35; }
@@ -64,7 +74,22 @@ STYLE = """
   .dot.none { background:transparent; border:2px solid var(--line); }
   .notice { margin:10px 18px; padding:10px 12px; border-left:3px solid var(--early);
             background:#221f15; font-size:.85rem; }
+  .note { margin:10px 18px; color:var(--dim); font-size:.85rem; }
   .group[hidden], .notice[hidden] { display:none; }
+  .pickers { display:flex; gap:8px; padding:0 18px; }
+  .pickers select { flex:1; min-width:0; background:var(--card); color:var(--ink);
+                    border:1px solid var(--line); border-radius:10px; padding:10px; font-size:1rem; }
+  .score { display:flex; justify-content:space-around; align-items:baseline; margin:14px 18px;
+           font-size:1.6rem; font-weight:700; }
+  .score small { display:block; font-size:.75rem; color:var(--dim); font-weight:400; text-align:center; }
+  table.box { width:calc(100% - 36px); margin:0 18px 10px; border-collapse:collapse; font-size:.8rem;
+              font-variant-numeric:tabular-nums; }
+  table.box th, table.box td { padding:6px 4px; text-align:right; border-bottom:1px solid var(--line); }
+  table.box th:first-child, table.box td:first-child { text-align:left; }
+  table.box th { color:var(--dim); font-weight:500; }
+  table.box tr.total td { font-weight:600; }
+  .pbp div { padding:8px 18px; border-bottom:1px solid var(--line); font-size:.9rem; }
+  .pbp b { color:var(--dim); font-weight:500; margin-right:8px; }
   .slider { padding:6px 18px 10px; }
   .slider label { display:flex; justify-content:space-between; gap:12px; font-size:.9rem;
                   color:var(--dim); }
@@ -177,10 +202,12 @@ def settings_params(fan):
             + [(parameter, str(value)) for parameter, value in fan.values.items()])
 
 
-def page_href(names, fan, setup=False):
+def page_href(names, fan, setup=False, catchup_team=None):
     """The page's address for `names` and the fan's settings; `setup` asks for the setup screen, with the
-    `names` ticked."""
+    `names` ticked, and `catchup_team` asks for that team's catch-up screen."""
     leading = [("setup", "1")] if setup else []
+    if catchup_team:
+        leading.append(("catchup", catchup_team))
     return "/?" + urlencode(leading + [("teams", name) for name in names] + settings_params(fan))
 
 
@@ -348,10 +375,15 @@ def rules_panel(fan):
     return "\n".join(f"<p>{escape(line)}</p>" for line in lines)
 
 
-def card(row, fan):
-    """One followed team's card: a dot carrying the Verdict, its name, the rules applied, and the
-    disabled highlights button."""
+def card(row, teams, fan):
+    """One followed team's card: a dot carrying the Verdict, its name, the rules applied, the button that
+    opens its catch-up screen whatever the Verdict, and the disabled highlights button.
+
+    `teams` is every team the list shows, so Back from the catch-up screen returns to them all.
+    """
     team = escape(row["team"])
+    watch = (f'<a class="watching" href="{escape(page_href(teams, fan, catchup_team=row["team"]))}">'
+             f'I\'m watching</a>')
     verdict, preview = row["verdict"], row["next_game"]
     if verdict:
         dot = (f'<span class="dot {DOT_CLASSES[verdict]}" role="img" '
@@ -365,14 +397,238 @@ def card(row, fan):
     return f"""<article class="card" data-team="{team}">
 <details><summary>{dot}<span class="t">{team}{line}</span></summary>
 <div class="rules">{rules_panel(fan)}</div></details>
-<button class="highlights" disabled>No highlights yet</button>
+<div class="actions">{watch}
+<button class="highlights" disabled>No highlights yet</button></div>
 </article>"""
+
+
+CATCHUP_KEY = "radiosilence.catchup.%(game)s"
+CATCHUP_CONTROLS = """<script>
+(function () {
+  const KEY = %(key)s;
+  const TOPS = %(tops)s;
+  const asked = new URLSearchParams(location.search);
+  function remember(moment) {
+    try { localStorage.setItem(KEY, JSON.stringify(moment)); } catch (error) {}
+  }
+  function recalled() {
+    try { return JSON.parse(localStorage.getItem(KEY)); } catch (error) { return null; }
+  }
+  // A quarter's clock stops at 12:00 and overtime's at 50:00, so a minutes and seconds pair past its
+  // period's top is that clock's top.
+  function clamped(moment) {
+    const top = TOPS[moment.period];
+    const played = moment.minutes * 60 + moment.seconds;
+    if (played <= top) return moment;
+    const minutes = Math.floor(top / 60);
+    return {period: moment.period, minutes: minutes, seconds: top - minutes * 60};
+  }
+  // A fan coming back to the same game opens at the moment they last named on this phone.
+  if (!asked.has("period")) {
+    const saved = recalled();
+    if (saved) {
+      for (const name of ["period", "minutes", "seconds"]) asked.set(name, saved[name]);
+      location.replace("?" + asked);
+      return;
+    }
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    const form = document.getElementById("catchup");
+    if (!form) return;
+    const picked = function () {
+      return {period: form.elements.period.value,
+              minutes: Number(form.elements.minutes.value),
+              seconds: Number(form.elements.seconds.value)};
+    };
+    const moment = clamped(picked());
+    remember(moment);
+    for (const picker of form.querySelectorAll("select")) {
+      picker.addEventListener("change", function () {
+        const next = clamped(picked());
+        form.elements.period.value = next.period;
+        form.elements.minutes.value = next.minutes;
+        form.elements.seconds.value = next.seconds;
+        remember(next);
+        form.submit();
+      });
+    }
+  });
+})();
+</script>"""
+# Each box score column: its heading, and the answer's fields it shows, joined by "/" when it shows two, as
+# shooting does.
+STAT_COLUMNS = (("PTS", ("points",)), ("REB", ("rebounds",)), ("AST", ("assists",)), ("PF", ("fouls",)),
+                ("FG", ("field_goals_made", "field_goals_attempted")),
+                ("3PT", ("threes_made", "threes_attempted")),
+                ("FT", ("free_throws_made", "free_throws_attempted")))
+
+# The catch-up screen a request names: the team whose game it shows, every team the list holds so Back
+# returns to them all, the fan's settings its links carry, and the moment its pickers name.
+CatchUpView = namedtuple("CatchUpView", "team teams fan moment")
+
+
+def catchup_href(view, tab):
+    """The catch-up screen's address for `view`'s game at its moment, showing the tab `tab`."""
+    period, minutes, seconds = view.moment
+    return page_href(view.teams, view.fan, catchup_team=view.team) + "&" + urlencode(
+        [("period", period), ("minutes", str(minutes)), ("seconds", str(seconds)), ("tab", tab)])
+
+
+def catchup_pickers(moment):
+    """The period, minutes and seconds pickers at `moment`: the same five periods whatever the game, a
+    quarter's clock running 12 to 0 and overtime's 0 to 50 minutes."""
+    period, minutes, seconds = moment
+    periods = "".join(f'<option value="{value}"{" selected" if value == period else ""}>{value}</option>'
+                      for value in catchup.PERIODS)
+    top = catchup.CLOCK_SECONDS[period] // 60
+    # A quarter's clock counts down to 0, so its minutes run top to 0; overtime counts up from 0.
+    minute_values = range(top + 1) if period == catchup.OVERTIME else range(top, -1, -1)
+    minute_options = "".join(
+        f'<option value="{value}"{" selected" if value == minutes else ""}>{value} min</option>'
+        for value in minute_values)
+    second_options = "".join(
+        f'<option value="{value}"{" selected" if value == seconds else ""}>{value:02d}</option>'
+        for value in range(60))
+    return f"""<div class="pickers">
+<select name="period" aria-label="Period">{periods}</select>
+<select name="minutes" aria-label="Minutes">{minute_options}</select>
+<select name="seconds" aria-label="Seconds">{second_options}</select>
+</div>"""
+
+
+def catchup_form(view, tab):
+    """The pickers' form: the same GET the screen was opened by, carrying its team, the list's teams and
+    the fan's settings, so the new moment opens the same way."""
+    hidden = ([("catchup", view.team), ("teams", ",".join(view.teams)), ("tab", tab)]
+              + settings_params(view.fan))
+    fields = "".join(f'<input type="hidden" name="{name}" value="{escape(str(value))}">'
+                     for name, value in hidden)
+    return f'<form id="catchup" method="get" action="/">{fields}{catchup_pickers(view.moment)}</form>'
+
+
+def moment_note(moment):
+    """The words under the pickers: which moment the screen shows and that nothing later is sent."""
+    period, minutes, seconds = moment
+    clock = f"{minutes}:{seconds:02d}"
+    if period == catchup.OVERTIME:
+        return (f"In OT, minutes count overtime played since the end of regulation, each overtime five "
+                f"minutes. Showing the game {clock} into overtime. Nothing later is sent to your phone.")
+    return f"Showing the game as of {clock} left in the {period} quarter. Nothing later is sent to your phone."
+
+
+def catchup_score(answer):
+    """The score at the fan's moment: each team's points over its abbreviation."""
+    cells = "".join(
+        f'<span class="team-score">{team["points"]} <small>{escape(team["team"])}</small></span>'
+        for team in answer["teams"])
+    return f'<div class="score">{cells}</div>'
+
+
+def stat_cell(line, fields):
+    """One stat's cell: its count, or made of attempted for shooting."""
+    return "/".join(str(line[field]) for field in fields)
+
+
+def clock_minutes(minutes):
+    """A player's minutes as a box score prints them, minutes and seconds: 2.67 minutes is 2:40."""
+    seconds = round(minutes * 60)
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def box_row(name, line, minutes=None, total=False):
+    """One box score row: a name, its minutes when it has them, and every stat column. A team's totals
+    row has no minutes and is marked so it stands out from its players."""
+    cells = "".join(f"<td>{escape(stat_cell(line, fields))}</td>" for _, fields in STAT_COLUMNS)
+    minutes_cell = "—" if minutes is None else clock_minutes(minutes)
+    marker = ' class="total"' if total else ""
+    return f'<tr{marker}><td>{escape(name)}</td><td>{minutes_cell}</td>{cells}</tr>'
+
+
+def catchup_box(answer):
+    """Each team's players and its totals: minutes, points, rebounds, assists, fouls and shooting."""
+    headings = "".join(f"<th>{heading}</th>"
+                       for heading in ("Player", "MIN") + tuple(heading for heading, _ in STAT_COLUMNS))
+    tables = []
+    for team in answer["teams"]:
+        players = "".join(box_row(player["name"], player, player["minutes"])
+                          for player in answer["players"] if player["team"] == team["team"])
+        tables.append(f"""<h2>{escape(team["name"])}</h2>
+<table class="box"><thead><tr>{headings}</tr></thead>
+<tbody>{players}{box_row(team["team"], team, total=True)}</tbody></table>""")
+    return "".join(tables)
+
+
+def catchup_plays(answer):
+    """The plays up to the fan's moment, newest first, each with its period, clock and team."""
+    if not answer["plays"]:
+        return '<p class="note">No plays at your moment yet.</p>'
+    rows = "".join(
+        f'<div><b>{escape(" ".join(filter(None, (play["period"], play["clock"]))))}'
+        f'{" · " + escape(play["team"]) if play["team"] else ""}</b>{escape(play["text"])}</div>'
+        for play in answer["plays"])
+    return f'<div class="pbp">{rows}</div>'
+
+
+# One tab of the catch-up screen: the words its link shows, and the part of the screen it shows.
+Tab = namedtuple("Tab", "words body")
+# The catch-up screen's two tabs, in the order it offers them, and the one it opens on.
+TABS = {"box": Tab("Box score", catchup_box), "plays": Tab("Play-by-play", catchup_plays)}
+DEFAULT_TAB = "box"
+
+
+def catchup_tab(named):
+    """The tab a catch-up request's `tab` value names: Box score unless it names Play-by-play."""
+    return named if named in TABS else DEFAULT_TAB
+
+
+def catchup_tabs(view, tab):
+    """The catch-up screen's two tabs, the shown one marked, each keeping the moment picked."""
+    links = "".join(
+        f'<a class="pick{" on" if key == tab else ""}"'
+        f' href="{escape(catchup_href(view, key))}">{entry.words}</a>'
+        for key, entry in TABS.items())
+    return f'<div class="picks">{links}</div>'
+
+
+def back_link(teams, fan):
+    """The Back button from the catch-up screen to the list of the fan's teams."""
+    return f'<a class="btn" href="{escape(page_href(teams, fan))}">Back</a>'
+
+
+def catchup_notice(teams, fan, notice_text):
+    """The catch-up screen when there is no game to show: the words why, and Back to the list."""
+    return shell(f"""<main id="main">
+<h1>Catch-up</h1>
+{notice(notice_text)}
+{back_link(teams, fan)}
+</main>""")
+
+
+def catchup_screen(team, teams, fan, game_id, answer, moment, tab):
+    """The catch-up screen for `team`'s game: where the fan is in the recording at `moment`, the score,
+    the Box score or Play-by-play tab and Back. The screen's script remembers the moment under `game_id`
+    on the phone, so the fan's next visit opens where they left off."""
+    view = CatchUpView(team, teams, fan, moment)
+    controls = CATCHUP_CONTROLS % {"key": json.dumps(CATCHUP_KEY % {"game": game_id}),
+                                   "tops": json.dumps(catchup.CLOCK_SECONDS)}
+    body = f"""<main id="main">
+{controls}
+<h1>Where you are in the recording</h1>
+{catchup_form(view, tab)}
+<p class="note">{escape(moment_note(view.moment))}</p>
+{catchup_score(answer)}
+{catchup_tabs(view, tab)}
+{TABS[tab].body(answer)}
+{back_link(teams, fan)}
+</main>"""
+    return shell(body)
 
 
 def list_screen(rows, fan, notice_text=None):
     """The main screen: one card per followed team, refreshing itself every minute."""
+    teams = [row["team"] for row in rows]
     body = f"""<main id="main">
 {notice(notice_text)}
-{"".join(card(row, fan) for row in rows)}
+{"".join(card(row, teams, fan) for row in rows)}
 </main>"""
-    return shell(body, refresh=True, gear_href=page_href([row["team"] for row in rows], fan, setup=True))
+    return shell(body, refresh=True, gear_href=page_href(teams, fan, setup=True))

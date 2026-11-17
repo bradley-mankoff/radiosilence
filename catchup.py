@@ -8,17 +8,36 @@ plays, and the minutes from the boxscore's starters and the substitution plays. 
 "4th", where the clock is the time left in the period, or "OT", where the minutes count overtime played
 since the end of regulation (each overtime is five minutes, so 9 minutes is four minutes into the second
 overtime). A moment past the latest play gives the whole game, shaped exactly like any other answer:
-the answer never says whether the game is over or whether it had overtime.
+the answer never says whether the game is over or whether it had overtime, so it carries none of ESPN's
+plays that only mark a period's or the game's end.
 """
 
 import collections
+from collections import namedtuple
 
 from judging import elapsed
 
 QUARTERS = {"1st": 1, "2nd": 2, "3rd": 3, "4th": 4}
+OVERTIME = "OT"
+PERIODS = (*QUARTERS, OVERTIME)  # the period picker's list, the same whatever the game
 QUARTER_SECONDS = 12 * 60
 REGULATION_SECONDS = 4 * QUARTER_SECONDS
+OVERTIME_SECONDS = 5 * 60  # each overtime is five minutes long
 MAX_OVERTIME_MINUTES = 50
+FIRST_OVERTIME = len(QUARTERS) + 1  # ESPN numbers the periods, so the first overtime is the 5th
+# The top of each period's clock, which the catch-up screen's pickers offer and its script clamps to: a
+# quarter counts down from 12:00, and overtime counts up to 50:00 played.
+CLOCK_SECONDS = {**dict.fromkeys(QUARTERS, QUARTER_SECONDS), OVERTIME: MAX_OVERTIME_MINUTES * 60}
+# The moment a game starts at, and so the one a catch-up screen opens on when the fan has named none.
+TIP_OFF = ("1st", QUARTER_SECONDS // 60, 0)
+# ESPN's plays that only mark a period's or the game's end, never something a team did. A fan at the end of
+# the 4th quarter who sees "End of the 4th Quarter" followed by "End of Game" learns regulation was the
+# whole game, which gives away that no overtime came, so no answer carries one at any moment.
+MARKER_TYPES = ("End Period", "End Game")
+
+# One play of ESPN's list, with the game time it happened at and its place in that list, which keeps two
+# plays at the same moment in ESPN's order.
+Timed = namedtuple("Timed", "at index play")
 
 # Every line the answer sends, for a team and for a player alike.
 LINE = ("points", "field_goals_made", "field_goals_attempted",
@@ -38,12 +57,26 @@ def moment_seconds(period, minutes, seconds):
             raise ValueError(f"A quarter's clock runs from 12:00 down to 0:00, not {minutes}:{seconds:02d}.")
         left = minutes * 60 + seconds
         return (QUARTERS[period] - 1) * QUARTER_SECONDS + QUARTER_SECONDS - left
-    if period == "OT":
+    if period == OVERTIME:
         if not 0 <= minutes <= MAX_OVERTIME_MINUTES or not 0 <= seconds <= 59:
             raise ValueError(f"Overtime runs from 0 to {MAX_OVERTIME_MINUTES} minutes, "
                              f"not {minutes}:{seconds:02d}.")
         return REGULATION_SECONDS + minutes * 60 + seconds
     raise ValueError(f"No period called {period}.")
+
+
+def moment_period(period, played):
+    """ESPN's number for the period the fan's moment falls in, `played` seconds of game time in.
+
+    A quarter's number is its own. Overtime numbers the five-minute periods played, so 9:00 is the
+    second overtime; 5:00 is still the first overtime's end, its clock already stopped while the next
+    overtime's has started. So a moment at 4th 0:00 or OT 5:00 never covers the period after it, whose
+    opening tip shares its game time, and a moment at OT 0:00 covers the first overtime's.
+    """
+    if period in QUARTERS:
+        return QUARTERS[period]
+    overtime = played - REGULATION_SECONDS
+    return FIRST_OVERTIME + (overtime - 1) // OVERTIME_SECONDS if overtime else FIRST_OVERTIME
 
 
 def first_player(participants):
@@ -165,12 +198,13 @@ def minutes_on_floor(included, player_rows, team_ids, stop):
                     seconds[player_id] += until - since
 
     now = 0.0
-    for at, _, play in included:
-        credit(now, at)
-        now = at
-        if play["type"]["text"] == "Substitution":
-            entering, leaving = (athlete["athlete"]["id"] for athlete in play.get("participants", []))
-            team = play_team(play, team_ids)
+    for entry in included:
+        credit(now, entry.at)
+        now = entry.at
+        if entry.play["type"]["text"] == "Substitution":
+            entering, leaving = (athlete["athlete"]["id"]
+                                 for athlete in entry.play.get("participants", []))
+            team = play_team(entry.play, team_ids)
             if team in floor:
                 floor[team].discard(leaving)
                 floor[team].add(entering)
@@ -201,20 +235,26 @@ def catch_up(summary, period, minutes, seconds):
     team's totals are the sum of its players' lines, so the box score adds up. A player's minutes are
     time on the floor, to a hundredth of a minute, running to the fan's moment but never past the
     latest play, so a fan naming a moment a live game has not reached sees the minutes as far as it
-    has got. The play list runs newest first. A moment past the latest play returns the whole game, and
+    has got. The play list runs newest first and leaves out ESPN's end-of-period and end-of-game
+    markers, which could tell the fan the game was over, and every play from a period the moment has
+    not reached: overtime's opening tip shares the 4th quarter's 0:00, and sending it at that moment
+    would tell the fan an overtime followed. A moment past the latest play returns the whole game, and
     an answer never carries a game-over or overtime flag.
     """
-    moment = moment_seconds(period, minutes, seconds)
+    at = moment_seconds(period, minutes, seconds)
+    last_period = moment_period(period, at)
     team_rows, player_rows, team_ids = roster(summary)
     player_lines = {row["id"]: collections.Counter() for row in player_rows}
-    timed = [(elapsed(play), index, play) for index, play in enumerate(summary.get("plays", []))]
-    included = sorted((entry for entry in timed if entry[0] <= moment),
-                      key=lambda entry: (entry[0], entry[1]))
-    for _, _, play in included:
-        count_play(play, player_lines)
+    timed = [Timed(elapsed(play), index, play) for index, play in enumerate(summary.get("plays", []))]
+    included = sorted((entry for entry in timed
+                       if entry.at <= at and entry.play["period"]["number"] <= last_period
+                       and entry.play["type"]["text"] not in MARKER_TYPES),
+                      key=lambda entry: (entry.at, entry.index))
+    for entry in included:
+        count_play(entry.play, player_lines)
     # ESPN appends late corrections, so the latest game time is not the last play in its list.
-    latest = max((entry[0] for entry in timed), default=0.0)
-    minutes_played = minutes_on_floor(included, player_rows, team_ids, min(moment, latest))
+    latest = max((entry.at for entry in timed), default=0.0)
+    minutes_played = minutes_on_floor(included, player_rows, team_ids, min(at, latest))
     team_lines = {row["team"]: collections.Counter() for row in team_rows}
     for row in player_rows:
         team_lines[row["team"]].update(player_lines[row["id"]])
@@ -232,6 +272,6 @@ def catch_up(summary, period, minutes, seconds):
                 "minutes": minutes_played[row["id"]],
                 **stat_line(player_lines[row["id"]])}
                for row in player_rows]
-    newest_first = sorted(included, key=lambda entry: (-entry[0], entry[1]))
-    plays = [answer_play(play, play_team(play, team_ids)) for _, _, play in newest_first]
+    newest_first = sorted(included, key=lambda entry: (-entry.at, entry.index))
+    plays = [answer_play(entry.play, play_team(entry.play, team_ids)) for entry in newest_first]
     return {"score": score, "teams": teams, "players": players, "plays": plays}
