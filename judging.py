@@ -194,10 +194,16 @@ def row(name, game_verdict=None, detail=None, preview=None):
     return {"team": name, "verdict": game_verdict, "detail": detail, "next_game": preview}
 
 
-def verdict_row(name, abbreviation, event, get, fan):
-    """One row for `abbreviation`'s started game `event`, labelled with the name the fan gave as `name`."""
+def verdict_row(name, abbreviation, event, get, fan, highlights=None):
+    """One row for `abbreviation`'s started game `event`, labelled with the name the fan gave as `name`.
+
+    `highlights` gives the row's End Highlights button from the event; without it the row holds no button.
+    """
     game_verdict, detail = verdict(get(f"{ESPN}/summary?event={event['id']}"), abbreviation, fan)
-    return row(name, game_verdict=game_verdict, detail=detail)
+    line = row(name, game_verdict=game_verdict, detail=detail)
+    if highlights is not None:
+        line["highlights"] = highlights(event)
+    return line
 
 
 def schedule_for(abbreviation, get):
@@ -237,11 +243,11 @@ def next_game(schedule, today, abbreviation):
     return None
 
 
-def judge_team(name, abbreviation, today, today_games, get, fan):
+def judge_team(name, abbreviation, today, today_games, get, fan, highlights=None):
     """The row for the fan's `name`, which ESPN calls `abbreviation`, on the Game day `today`."""
     game = started_game(today_games, abbreviation)
     if game:
-        return verdict_row(name, abbreviation, game, get, fan)
+        return verdict_row(name, abbreviation, game, get, fan, highlights)
 
     preview = next_game(schedule_for(abbreviation, get), today, abbreviation)
     if preview is None:
@@ -249,7 +255,7 @@ def judge_team(name, abbreviation, today, today_games, get, fan):
     return row(name, preview=preview)
 
 
-def judge(teams, today, get, fan=None):
+def judge(teams, today, get, fan=None, highlights=None):
     """Return one row per team in `teams` for the Game day `today`, in the order given.
 
     `fan` is the fan's Presets, AND or OR and slider values; a request that names none gets a row that
@@ -257,7 +263,8 @@ def judge(teams, today, get, fan=None):
     row and no request of its own, so one bad spelling cannot hide the other rows. A team with a started
     game today gets its Verdict and detail with next_game None, so a finished game has the same shape as
     a live one. A team without one gets its Next-game preview with verdict and detail None, or, when its
-    schedule has no game left, a detail and nothing else.
+    schedule has no game left, a detail and nothing else. `highlights`, when given, turns a started game's
+    ESPN event into that row's End Highlights button.
     """
     fan = fan or Settings()
     known = espn_abbreviations(get)
@@ -266,5 +273,5 @@ def judge(teams, today, get, fan=None):
         return [unknown_row(team) for team in teams]
     scoreboard = get(f"{ESPN}/scoreboard?dates={today:%Y%m%d}")
     today_games = [event for event in scoreboard["events"] if start_time(event).date() == today]
-    return [judge_team(team, abbreviation, today, today_games, get, fan) if abbreviation else unknown_row(team)
-            for team, abbreviation in zip(teams, abbreviations)]
+    return [judge_team(team, abbreviation, today, today_games, get, fan, highlights)
+            if abbreviation else unknown_row(team) for team, abbreviation in zip(teams, abbreviations)]

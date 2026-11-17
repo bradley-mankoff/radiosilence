@@ -3,7 +3,8 @@ from behind.
 
 The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
 judging.py works out each team's row from ESPN's public JSON and the fan's settings; catchup.py rebuilds
-the score, box score and plays as of the moment the fan names; page.py turns the rows into the list and
+the score, box score and plays as of the moment the fan names; highlights.py finds each started game's
+highlight reel without giving away its title, thumbnail or length; page.py turns the rows into the list and
 the catch-up answer into the catch-up screen; and this file serves them all, sharing ESPN answers for a
 short while. Only the catch-up answer and screen carry a score, clock or quarter, and only for the plays
 at or before the moment the fan names: every other answer holds no score, clock, quarter, win-probability
@@ -19,8 +20,9 @@ from collections import namedtuple
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
+import highlights
 import page
 import presets
 from catchup import TIP_OFF, catch_up, moment_seconds
@@ -43,6 +45,26 @@ Saved = namedtuple("Saved", "at lifetime body")
 
 
 def fetch(url):
+    with urllib.request.urlopen(url, timeout=10) as response:
+        return json.load(response)
+
+
+# YouTube serves its playlist page to a browser and may refuse a bare Python client, so ask as one.
+USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120 Safari/537.36")
+
+
+def fetch_page(url):
+    """The text at `url`, read with a browser's user agent so YouTube serves its playlist page."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def oembed(video_id):
+    """YouTube's keyless oEmbed answer for `video_id`, or an error when it is gone or cannot be embedded."""
+    url = (f"https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v="
+           f"{quote(video_id, safe='')}")
     with urllib.request.urlopen(url, timeout=10) as response:
         return json.load(response)
 
@@ -164,7 +186,18 @@ def catchup_page(team, params, names, fan, now, get):
     return page.catchup_screen(team, teams, fan, game_id, catch_up(summary, *moment), moment, tab)
 
 
-def root_page(query, now, get):
+def highlight_buttons(now, reels=None):
+    """A function giving each started game's ESPN event its highlights button at `now`.
+
+    `reels` finds a game's button, such as a highlights.Highlights; without one every game waits, disabled,
+    because no reel was looked for.
+    """
+    if reels is None:
+        return lambda event: highlights.waiting()
+    return lambda event: reels.button(highlights.game_of(event), now)
+
+
+def root_page(query, now, get, reels=None):
     """The page at `/` for `query`: team setup, the list of cards for the teams it names, or the catch-up
     screen of the team it names."""
     params = parse_qs(query)
@@ -176,7 +209,7 @@ def root_page(query, now, get):
     try:
         if showing_setup:
             return page.setup_screen(sorted(espn_abbreviations(get)), names, fan)
-        return page.list_screen(judge(names, now.date(), get, fan), fan)
+        return page.list_screen(judge(names, now.date(), get, fan, highlight_buttons(now, reels)), fan)
     except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
         outage = espn_outage(error)
         if showing_setup:
@@ -206,10 +239,11 @@ def catchup_answer(params, now, get):
         return json_answer(400, {"error": str(error)})
 
 
-def respond(path, now, get):
+def respond(path, now, get, reels=None):
     """Return (status, content type, body bytes) for a GET of `path`.
 
-    `now` sets the Game day and `get` returns ESPN's JSON for a URL (the server passes a Cached fetch).
+    `now` sets the Game day, `get` returns ESPN's JSON for a URL (the server passes a Cached fetch), and
+    `reels` finds each started game's highlights button (the server passes the Highlights cache).
     """
     url = urlsplit(path)
     if url.path == "/presets":
@@ -217,7 +251,7 @@ def respond(path, now, get):
     if url.path == "/rows":
         names, fan = teams_and_fan(parse_qs(url.query))
         try:
-            rows = judge(names, now.date(), get, fan)
+            rows = judge(names, now.date(), get, fan, highlight_buttons(now, reels))
         except ESPN_UNREACHABLE as error:
             return json_answer(503, {"error": espn_outage(error)})
         return json_answer(200, {"rows": rows})
@@ -230,16 +264,18 @@ def respond(path, now, get):
     if static in STATIC_FILES:  # the manifest and its icons, by name, so no other path reaches disk
         return 200, STATIC_FILES[static], (STATIC_DIR / static).read_bytes()
     if url.path == "/":
-        return 200, HTML_TYPE, root_page(url.query, now, get).encode()
+        return 200, HTML_TYPE, root_page(url.query, now, get, reels).encode()
     return 404, TEXT_TYPE, b"Not found"
 
 
 CACHE = Cached(fetch)
+# The playlist page is read only for a game past its wait, and each game's answer is kept for a while.
+HIGHLIGHTS = highlights.Highlights(lambda: fetch_page(highlights.PLAYLIST), oembed)
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        status, content_type, body = respond(self.path, datetime.now().astimezone(), CACHE)
+        status, content_type, body = respond(self.path, datetime.now().astimezone(), CACHE, HIGHLIGHTS)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")

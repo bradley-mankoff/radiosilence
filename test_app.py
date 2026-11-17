@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 os.environ["TZ"] = "America/Chicago"
 time.tzset()
 
+import highlights
 from app import CACHE_SECONDS, Cached, HTML_TYPE, JSON_TYPE, respond
 from catchup import LINE, catch_up
 from judging import ESPN, judge, start_time
@@ -48,6 +49,10 @@ DAL = ("DAL", "Dallas Mavericks")
 HOU = ("HOU", "Houston Rockets")
 SA = ("SA", "San Antonio Spurs")
 OKC = ("OKC", "Oklahoma City Thunder")
+LAC = ("LAC", "LA Clippers")
+
+# The button a started game shows while no reel has been found, as the rows and the page hold it.
+WAITING = {"label": "No highlights yet", "link": None}
 
 
 def side(home_or_away, team, score="0"):
@@ -655,7 +660,8 @@ class RowsResponseTest(unittest.TestCase):
     def test_a_finished_game_row_has_the_same_shape_as_a_live_one(self):
         rows = {row["team"]: row for row in json.loads(self.rows_body(["BOS", "IND"]))["rows"]}
         self.assertEqual(set(rows["BOS"]), set(rows["IND"]))
-        self.assertEqual(set(rows["BOS"]), {"team", "verdict", "detail", "next_game"})
+        self.assertEqual(set(rows["BOS"]), {"team", "verdict", "detail", "next_game", "highlights"})
+        self.assertEqual(rows["BOS"]["highlights"], WAITING)
 
     def test_names_espn_does_not_know_do_not_blank_the_other_rows(self):
         status, content_type, body = respond("/rows?teams=BOS,XYZ,NEW%20YORK&presets=blow", NOW, espn(night()))
@@ -698,7 +704,8 @@ class RowsResponseTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["rows"][0],
                          {"team": "BOS", "verdict": None,
-                          "detail": "Pick a Preset to judge this game.", "next_game": None})
+                          "detail": "Pick a Preset to judge this game.", "next_game": None,
+                          "highlights": WAITING})
 
     def test_an_unreachable_espn_is_an_error_not_a_verdict(self):
         def offline(url):
@@ -707,6 +714,133 @@ class RowsResponseTest(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertNotIn("rows", json.loads(body))
         self.assertIn("error", json.loads(body))
+
+
+# The highlights tests use the Epic's own example: the Thunder at the Clippers on November 13, 2026,
+# tipping off at 7:00 PM Dallas time, so the 3 hours 30 minutes wait ends at 10:30 PM.
+ENDING_TITLE = "Final 5:31 WILD ENDING Thunder at Clippers | November 13, 2026"
+REEL_TITLE = "THUNDER at CLIPPERS | FULL GAME HIGHLIGHTS | November 13, 2026"
+HIGHLIGHTS_GAME = highlights.game_of(
+    event("highlights", "2026-11-14T01:00Z", "post", (LAC, "112"), (OKC, "118")))
+WAIT_IS_OVER = datetime(2026, 11, 13, 22, 30).astimezone()
+BEFORE_WAIT_IS_OVER = datetime(2026, 11, 13, 22, 29).astimezone()
+
+
+def playlist_page(*videos):
+    """YouTube's uploads playlist page, in the shape YouTube serves it, listing `videos` in page order.
+    Each video is (its id, its title, its length badge)."""
+    lockups = [{"lockupViewModel": {
+        "contentId": video_id,
+        "contentImage": {"thumbnailViewModel": {
+            "image": {"sources": [{"url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"}]},
+            "overlays": [{"thumbnailBottomOverlayViewModel": {"badges": [
+                {"thumbnailBadgeViewModel": {"text": length}}]}}]}},
+        "metadata": {"lockupMetadataViewModel": {"title": {"content": title}}},
+    }} for video_id, title, length in videos]
+    data = {"contents": {"twoColumnBrowseResultsRenderer": {"tabs": [{"tabRenderer": {"content": {
+        "sectionListRenderer": {"contents": [{"itemSectionRenderer": {"contents": lockups}}]}}}}]}}}
+    return f"<script>var ytInitialData = {json.dumps(data)};</script>"
+
+
+def oembed_answer(authors):
+    """YouTube's oEmbed answers by video id, naming each author; an id it does not hold is a 404."""
+    def answer(video_id):
+        if video_id not in authors:
+            raise ValueError("Not Found")
+        return {"author_name": authors[video_id]}
+    return answer
+
+
+def highlight_finder(page, authors):
+    """A highlights finder that reads the saved `page` and YouTube's `authors`, and no network."""
+    return highlights.Highlights(lambda: page, oembed_answer(authors))
+
+
+def highlights_answer(page, authors, now=WAIT_IS_OVER):
+    """The Thunder at Clippers button at `now`, from a saved page and its videos' oEmbed authors."""
+    return highlight_finder(page, authors).button(HIGHLIGHTS_GAME, now)
+
+
+class HighlightsTest(unittest.TestCase):
+    """The highlights seam: a game, the time, a saved playlist page and YouTube's authors to a button."""
+
+    def test_before_the_wait_is_over_the_button_waits_even_though_an_ending_video_is_saved(self):
+        page = playlist_page(("ending", ENDING_TITLE, "5:31"))
+        self.assertEqual(highlights_answer(page, {"ending": "NBA"}, BEFORE_WAIT_IS_OVER), WAITING)
+
+    def test_before_the_wait_is_over_the_playlist_page_is_not_read(self):
+        def page():
+            raise AssertionError("the playlist page was read before the wait was over")
+        reels = highlights.Highlights(page, oembed_answer({"ending": "NBA"}))
+        self.assertEqual(reels.button(HIGHLIGHTS_GAME, BEFORE_WAIT_IS_OVER), WAITING)
+
+    def test_an_ending_video_opens_from_its_start_even_when_a_full_game_reel_is_listed_first(self):
+        page = playlist_page(("reel", REEL_TITLE, "15:02"), ("ending", ENDING_TITLE, "5:31"))
+        self.assertEqual(highlights_answer(page, {"ending": "NBA", "reel": "NBA"}),
+                         {"label": "End Highlights", "link": "https://www.youtube.com/watch?v=ending"})
+
+    def test_only_a_full_game_reel_opens_two_minutes_before_its_end(self):
+        page = playlist_page(("reel", REEL_TITLE, "15:02"))
+        self.assertEqual(highlights_answer(page, {"reel": "NBA"}),
+                         {"label": "End Highlights", "link": "https://www.youtube.com/watch?v=reel&t=782s"})
+
+    def test_a_game_with_no_reel_waits(self):
+        page = playlist_page(("other", "SUNS at NUGGETS | FULL GAME HIGHLIGHTS | November 16, 2026", "16:15"))
+        self.assertEqual(highlights_answer(page, {"other": "NBA"}), WAITING)
+
+    def test_an_extended_version_is_never_chosen(self):
+        page = playlist_page(("extended", "EXTENDED: " + REEL_TITLE, "30:32"))
+        self.assertEqual(highlights_answer(page, {"extended": "NBA"}), WAITING)
+
+    def test_a_team_channels_video_is_never_chosen(self):
+        page = playlist_page(("team", REEL_TITLE, "3:14"))
+        self.assertEqual(highlights_answer(page, {"team": "Dallas Mavericks"}), WAITING)
+
+    def test_a_reel_for_another_date_is_not_chosen(self):
+        page = playlist_page(("reel", "THUNDER at CLIPPERS | FULL GAME HIGHLIGHTS | November 12, 2026", "15:02"))
+        self.assertEqual(highlights_answer(page, {"reel": "NBA"}), WAITING)
+
+    def test_a_reel_that_names_only_one_team_is_not_chosen(self):
+        page = playlist_page(("reel", "THUNDER | FULL GAME HIGHLIGHTS | November 13, 2026", "15:02"))
+        self.assertEqual(highlights_answer(page, {"reel": "NBA"}), WAITING)
+
+    def test_the_button_carries_only_its_label_and_link(self):
+        page = playlist_page(("reel", REEL_TITLE, "15:02"))
+        answer = highlights_answer(page, {"reel": "NBA"})
+        self.assertEqual(set(answer), {"label", "link"})
+        for spoiler in (REEL_TITLE, "https://i.ytimg.com/vi/reel/hqdefault.jpg", "15:02", "902"):
+            self.assertNotIn(spoiler, json.dumps(answer), spoiler)
+
+    def test_an_unreachable_playlist_page_leaves_the_button_waiting(self):
+        def offline():
+            raise urllib.error.URLError("offline")
+        reels = highlights.Highlights(offline, oembed_answer({}))
+        self.assertEqual(reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER), WAITING)
+
+    def test_a_candidate_youtube_will_not_answer_for_is_not_chosen(self):
+        page = playlist_page(("reel", REEL_TITLE, "15:02"))
+
+        def offline(video_id):
+            raise urllib.error.URLError("offline")
+        reels = highlights.Highlights(lambda: page, offline)
+        self.assertEqual(reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER), WAITING)
+
+    def test_a_found_reel_is_kept_for_the_game_when_the_page_changes(self):
+        page = [playlist_page(("reel", REEL_TITLE, "15:02"))]
+        reels = highlights.Highlights(lambda: page[0], oembed_answer({"reel": "NBA"}))
+        found = reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER)
+        page[0] = playlist_page()
+        self.assertEqual(reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER), found)
+
+    def test_a_game_is_looked_up_again_once_its_answer_has_been_kept_too_long(self):
+        page = [playlist_page()]  # nothing listed yet, so the first look waits
+        now = [0]
+        reels = highlights.Highlights(lambda: page[0], oembed_answer({"reel": "NBA"}), lambda: now[0])
+        reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER)
+        page[0] = playlist_page(("reel", REEL_TITLE, "15:02"))
+        now[0] = highlights.KEPT_SECONDS
+        self.assertEqual(reels.button(HIGHLIGHTS_GAME, WAIT_IS_OVER),
+                         {"label": "End Highlights", "link": "https://www.youtube.com/watch?v=reel&t=782s"})
 
 
 class CatchUpAnswerTest(unittest.TestCase):
@@ -1107,8 +1241,8 @@ def card_rules(card):
 class PageServing(unittest.TestCase):
     """The page seam: the page respond serves for a path on the test's Game day."""
 
-    def page(self, path="/", get=None):
-        status, content_type, body = respond(path, NOW, get or espn(night()))
+    def page(self, path="/", get=None, reels=None):
+        status, content_type, body = respond(path, NOW, get or espn(night()), reels)
         self.assertEqual(status, 200)
         self.assertEqual(content_type, HTML_TYPE)
         return body.decode()
@@ -1197,6 +1331,29 @@ class PageTest(PageServing):
                                        card, re.S).groups()
         self.assertIn("disabled", attributes)
         self.assertEqual(words(label), "No highlights yet")
+
+    def test_a_card_past_the_wait_links_to_the_nbas_reel_as_end_highlights(self):
+        page = playlist_page(("reel", "CELTICS at KNICKS | FULL GAME HIGHLIGHTS | October 23, 2026", "15:02"))
+        card = cards(self.page("/?teams=BOS", reels=highlight_finder(page, {"reel": "NBA"})))["BOS"]
+        link = next(attrs["href"] for tag, attrs in tags(card) if attrs.get("class") == "highlights")
+        self.assertEqual(link, "https://www.youtube.com/watch?v=reel&t=782s")
+        self.assertIn("End Highlights", words(card))
+
+    def test_a_card_before_the_wait_is_disabled_even_though_a_reel_is_saved(self):
+        # The Pacers at Heat game tips off at 6:10 PM, so its wait ends at 9:40 PM, after the test's 7:00 PM.
+        page = playlist_page(("reel", "PACERS at HEAT | FULL GAME HIGHLIGHTS | October 23, 2026", "15:02"))
+        card = cards(self.page("/?teams=MIA", reels=highlight_finder(page, {"reel": "NBA"})))["MIA"]
+        self.assertRegex(card, r'<button class="highlights" disabled>\s*No highlights yet\s*</button>')
+
+    def test_a_card_whose_game_has_not_tipped_off_has_no_highlights_button(self):
+        self.assertNotIn('class="highlights"', cards(self.page("/?teams=DAL"))["DAL"])
+
+    def test_the_page_never_carries_a_reels_title_thumbnail_or_length(self):
+        title = "CELTICS at KNICKS | FULL GAME HIGHLIGHTS | October 23, 2026"
+        page = playlist_page(("reel", title, "15:02"))
+        shown = self.page("/?teams=BOS", reels=highlight_finder(page, {"reel": "NBA"}))
+        for spoiler in (title, "https://i.ytimg.com/vi/reel/hqdefault.jpg", "15:02", "902"):
+            self.assertNotIn(spoiler, shown, spoiler)
 
     def test_the_list_refreshes_after_a_minute(self):
         self.assertIn(("meta", {"http-equiv": "refresh", "content": "60"}),

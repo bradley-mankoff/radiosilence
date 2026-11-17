@@ -65,7 +65,7 @@ STYLE = """
               padding:8px 10px; font-size:.85rem; text-align:center; text-decoration:none;
               white-space:nowrap; }
   .highlights { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:999px;
-                padding:8px 10px; font-size:.85rem; }
+                padding:8px 10px; font-size:.85rem; text-align:center; text-decoration:none; }
   .highlights:disabled { opacity:.35; }
   .dot { width:14px; height:14px; border-radius:50%; flex:none; }
   .dot.watch { background:var(--watch); }
@@ -375,9 +375,22 @@ def rules_panel(fan):
     return "\n".join(f"<p>{escape(line)}</p>" for line in lines)
 
 
+def highlights_button(button):
+    """The card's highlights control from the row's button: End Highlights opening YouTube when a reel was
+    found, or the disabled No highlights yet while there is none. A row with no button, which is a game
+    that has not tipped off, gets no control at all, so its absence hints at nothing.
+    """
+    if not button:
+        return ""
+    if button["link"]:
+        return (f'<a class="highlights" href="{escape(button["link"])}" target="_blank" rel="noopener">'
+                f'{escape(button["label"])}</a>')
+    return f'<button class="highlights" disabled>{escape(button["label"])}</button>'
+
+
 def card(row, teams, fan):
     """One followed team's card: a dot carrying the Verdict, its name, the rules applied, the button that
-    opens its catch-up screen whatever the Verdict, and the disabled highlights button.
+    opens its catch-up screen whatever the Verdict, and its highlights button.
 
     `teams` is every team the list shows, so Back from the catch-up screen returns to them all.
     """
@@ -398,7 +411,7 @@ def card(row, teams, fan):
 <details><summary>{dot}<span class="t">{team}{line}</span></summary>
 <div class="rules">{rules_panel(fan)}</div></details>
 <div class="actions">{watch}
-<button class="highlights" disabled>No highlights yet</button></div>
+{highlights_button(row.get("highlights"))}</div>
 </article>"""
 
 

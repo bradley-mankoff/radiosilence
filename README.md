@@ -20,7 +20,7 @@ appears, or doesn't, can hint at overtime if you remember the tip-off.
 
 A team with no started game shows its next game's day, time and opponent instead. Tap a card to open the rules applied to it: your Presets with their values, and the AND or OR. The page refreshes itself every minute, and says plainly when ESPN cannot be reached. A finished game keeps its Verdict until midnight.
 
-The Mac computes the Verdicts and the page contains only them: no score, clock, quarter or win-probability percentage. The catch-up view and End Highlights come in later Specs; the highlights button is there and disabled for now.
+The Mac computes the Verdicts and the page contains only them: no score, clock, quarter or win-probability percentage. Each card whose game has tipped off also carries a highlights button: it reads **No highlights yet** and is disabled until 3 hours 30 minutes after the scheduled tip-off and until a reel is found, then **End Highlights** opens YouTube at the NBA's ending video, or at the last two minutes of its full-game reel. The page never carries a video's title, thumbnail or length. The catch-up view opens from a card's **I'm watching** button.
 
 ## Running
 
