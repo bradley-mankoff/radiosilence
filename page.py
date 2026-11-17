@@ -8,12 +8,10 @@ the next visit.
 from html import escape
 from urllib.parse import urlencode
 
-from judging import STAY_AWAY_ODDS
-
 NAME = "RadioSilence"
 STORAGE_KEY = "radiosilence.teams"
-# Until the Presets Spec lands, every card's rules panel states the one rule its dot follows.
-RULES = f"Stay away above {STAY_AWAY_ODDS:.0%} from 6:00 left in the 2nd quarter."
+# The Preset setup that lists the fan's Presets and values in this panel comes with the next pass.
+RULES = "The Presets you pick decide this dot."
 DOT_CLASSES = {"Watch": "watch", "Stay away": "stay", "Too early to call": "early"}
 
 STYLE = """

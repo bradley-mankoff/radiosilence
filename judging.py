@@ -1,16 +1,24 @@
 """Judging: one row per followed NBA team for the Game day, worked out from ESPN's public JSON.
 
 judge() takes `get`, a function that returns ESPN's JSON for a URL and raises when ESPN cannot be
-reached. The server passes a cached fetch and the tests pass saved responses, so this file never
-touches the network or the clock.
+reached, and the fan's Presets, AND or OR and slider values. The server passes a cached fetch and the
+tests pass saved responses, so this file never touches the network or the clock. Each Preset's rule
+returns fits, doesn't fit or not yet; combine() folds those answers into the row's Verdict.
 """
 
 from datetime import datetime
 from urllib.parse import quote
 
+from presets import Settings
+
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 TEAM_LIST = f"{ESPN}/teams"  # every NBA team, with the abbreviation ESPN uses for it
-STAY_AWAY_ODDS = 0.95  # opponent win probability above this means the game is out of reach
+
+# Each Preset returns one of these, and combine() turns the picked Presets' answers into a Verdict.
+FITS, DOESNT_FIT, NOT_YET = "fits", "doesn't fit", "not yet"
+VERDICTS = {FITS: ("Watch", "Still a game."),
+            DOESNT_FIT: ("Stay away", "This one looks out of reach."),
+            NOT_YET: ("Too early to call", "Check back later.")}
 
 # The short names fans use for some teams differ from the abbreviation ESPN lists them under.
 TEAM_ALIASES = {"NYK": "NY", "GSW": "GS", "SAS": "SA", "NOP": "NO", "UTA": "UTAH", "WAS": "WSH"}
@@ -47,35 +55,85 @@ def seconds_left(clock):
     return int(minutes or 0) * 60 + float(seconds)
 
 
-def game_time(play):
-    """Sorts plays by when they happened in the game: later periods, then less time left."""
-    return play["period"]["number"], -seconds_left(play["clock"]["displayValue"])
-
-
-def verdict(summary, abbreviation):
-    """Return (verdict, detail) for the team ESPN calls `abbreviation`, from one started game's summary."""
-    team_home = competitor(summary["header"], abbreviation)["homeAway"] == "home"
-    plays = {play["id"]: play for play in summary.get("plays", [])}
-    readings = [r for r in summary.get("winprobability", []) if r["playId"] in plays]
-    if not readings:
-        return "Too early to call", "ESPN hasn't published win probability for this game yet."
-
-    # ESPN appends late stat corrections to the end of the list, so the last Reading is not always
-    # the latest play; take the latest in game time, and the later one in the list on a tie.
-    latest = max(reversed(readings), key=lambda r: game_time(plays[r["playId"]]))
-    play = plays[latest["playId"]]
+def elapsed(play):
+    """Seconds played when `play` happened, counting overtime after the 4th quarter's 48 minutes."""
     period = play["period"]["number"]
     left = seconds_left(play["clock"]["displayValue"])
-    # The rule applies only from 6:00 left in the 2nd quarter onward.
-    if period < 2 or (period == 2 and left > 6 * 60):
-        return "Too early to call", "Check back after the middle of the 2nd quarter."
+    if period <= 4:
+        return (period - 1) * 720 + 720 - left
+    return 2880 + (period - 5) * 300 + 300 - left
 
-    # Judged on the latest reading alone, so a game that comes back goes from Stay away to Watch again.
-    home = latest["homeWinPercentage"]
-    opponent = 1 - home if team_home else home
-    if opponent > STAY_AWAY_ODDS:
-        return "Stay away", "This one looks out of reach."
-    return "Watch", "Still a game."
+
+def readings(summary):
+    """(seconds played, Reading) for every Reading ESPN also sent a play for, in game time.
+
+    ESPN appends late stat corrections to the end of the list, so the list order is not game order; a
+    stable sort keeps ESPN's order for two Readings at the same moment.
+    """
+    plays = {play["id"]: play for play in summary.get("plays", [])}
+    sent = [(elapsed(plays[reading["playId"]]), reading) for reading in summary.get("winprobability", [])
+            if reading["playId"] in plays]
+    return sorted(sent, key=lambda pair: pair[0])
+
+
+def opponent_chance(reading, team_is_home):
+    """The chance ESPN gives the team that is not the fan's, as a fraction."""
+    home = reading["homeWinPercentage"]
+    return 1 - home if team_is_home else home
+
+
+def wins_for_my_team(summary, abbreviation, fan):
+    """Not yet until the game is final, then fits only if the fan's team won."""
+    header = summary["header"]
+    if state(header) != "post":
+        return NOT_YET
+    team = competitor(header, abbreviation)
+    opponent = next(side for side in header["competitions"][0]["competitors"] if side is not team)
+    return FITS if int(team["score"]) > int(opponent["score"]) else DOESNT_FIT
+
+
+def no_blowout_losses(summary, abbreviation, fan):
+    """Walk the Readings from Judge from to Freeze at, staying away in the band and freezing after it."""
+    team_is_home = competitor(summary["header"], abbreviation)["homeAway"] == "home"
+    upper, lower = fan.value("blow_upper") / 100, fan.value("blow_lower") / 100
+    judge_from, freeze_at = fan.value("judge_from"), fan.value("freeze_at")
+    result = NOT_YET
+    for moment, reading in readings(summary):
+        if moment < judge_from:
+            continue
+        if moment > freeze_at:
+            break
+        opponent = opponent_chance(reading, team_is_home)
+        if result == DOESNT_FIT:
+            if opponent < lower:  # back to fits only below the lower line
+                result = FITS
+        elif opponent > upper:  # exactly the upper line is not over it
+            result = DOESNT_FIT
+        else:
+            result = FITS
+    return result
+
+
+PRESET_RESULTS = {"wins": wins_for_my_team, "blow": no_blowout_losses}
+
+
+def combine(results, join):
+    """Three-valued combination of the picked Presets' answers, as the fan chose AND or OR."""
+    if join == "AND":
+        if DOESNT_FIT in results:
+            return DOESNT_FIT
+        return FITS if results and all(result == FITS for result in results) else NOT_YET
+    if FITS in results:
+        return FITS
+    return DOESNT_FIT if results and all(result == DOESNT_FIT for result in results) else NOT_YET
+
+
+def verdict(summary, abbreviation, fan):
+    """Return (verdict, detail) for the team ESPN calls `abbreviation`, from a summary and the fan's Presets."""
+    if not fan.presets:
+        return None, "Pick a Preset to judge this game."
+    results = [PRESET_RESULTS[preset.key](summary, abbreviation, fan) for preset in fan.presets]
+    return VERDICTS[combine(results, fan.join)]
 
 
 def row(name, game_verdict=None, detail=None, preview=None):
@@ -86,9 +144,9 @@ def row(name, game_verdict=None, detail=None, preview=None):
     return {"team": name, "verdict": game_verdict, "detail": detail, "next_game": preview}
 
 
-def verdict_row(name, abbreviation, event, get):
+def verdict_row(name, abbreviation, event, get, fan):
     """One row for `abbreviation`'s started game `event`, labelled with the name the fan gave as `name`."""
-    game_verdict, detail = verdict(get(f"{ESPN}/summary?event={event['id']}"), abbreviation)
+    game_verdict, detail = verdict(get(f"{ESPN}/summary?event={event['id']}"), abbreviation, fan)
     return row(name, game_verdict=game_verdict, detail=detail)
 
 
@@ -129,11 +187,11 @@ def next_game(schedule, today, abbreviation):
     return None
 
 
-def judge_team(name, abbreviation, today, today_games, get):
+def judge_team(name, abbreviation, today, today_games, get, fan):
     """The row for the fan's `name`, which ESPN calls `abbreviation`, on the Game day `today`."""
     game = started_game(today_games, abbreviation)
     if game:
-        return verdict_row(name, abbreviation, game, get)
+        return verdict_row(name, abbreviation, game, get, fan)
 
     preview = next_game(schedule_for(abbreviation, get), today, abbreviation)
     if preview is None:
@@ -141,20 +199,22 @@ def judge_team(name, abbreviation, today, today_games, get):
     return row(name, preview=preview)
 
 
-def judge(teams, today, get):
+def judge(teams, today, get, fan=None):
     """Return one row per team in `teams` for the Game day `today`, in the order given.
 
-    Only a name ESPN's team list holds is judged; any other name gets its own row and no request of its
-    own, so one bad spelling cannot hide the other rows. A team with a started game today gets its
-    Verdict and detail with next_game None, so a finished game has the same shape as a live one. A team
-    without one gets its Next-game preview with verdict and detail None, or, when its schedule has no
-    game left, a detail and nothing else.
+    `fan` is the fan's Presets, AND or OR and slider values; a request that names none gets a row that
+    says a Preset is needed. Only a name ESPN's team list holds is judged; any other name gets its own
+    row and no request of its own, so one bad spelling cannot hide the other rows. A team with a started
+    game today gets its Verdict and detail with next_game None, so a finished game has the same shape as
+    a live one. A team without one gets its Next-game preview with verdict and detail None, or, when its
+    schedule has no game left, a detail and nothing else.
     """
+    fan = fan or Settings()
     known = espn_abbreviations(get)
     abbreviations = [espn_abbreviation(team, known) for team in teams]
     if not any(abbreviations):  # no known team means no game to look up
         return [unknown_row(team) for team in teams]
     scoreboard = get(f"{ESPN}/scoreboard?dates={today:%Y%m%d}")
     today_games = [event for event in scoreboard["events"] if start_time(event).date() == today]
-    return [judge_team(team, abbreviation, today, today_games, get) if abbreviation else unknown_row(team)
+    return [judge_team(team, abbreviation, today, today_games, get, fan) if abbreviation else unknown_row(team)
             for team, abbreviation in zip(teams, abbreviations)]

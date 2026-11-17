@@ -1,10 +1,10 @@
 """RadioSilence: tells a fan, without spoilers, whether each followed NBA team's game is worth watching
 from behind.
 
-The phone names its teams with each request, and the server keeps no per-fan state. judging.py works out
-each team's row from ESPN's public JSON; page.py turns those rows into the page; and this file serves
-both, sharing ESPN answers for a short while. No answer includes a score, clock, quarter, percentage, or a
-started game's tip-off time.
+The phone names its teams and its Presets with each request, and the server keeps no per-fan state.
+judging.py works out each team's row from ESPN's public JSON and the fan's settings; page.py turns those
+rows into the page; and this file serves both, sharing ESPN answers for a short while. No answer includes
+a score, clock, quarter, win-probability percentage, or a started game's tip-off time.
 """
 
 import json
@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import page
+import presets
 from judging import TEAM_LIST, espn_abbreviations, judge, row
 
 CACHE_SECONDS = 30  # one ESPN fetch per URL per cycle; the page refreshes every 60 seconds
@@ -86,15 +87,20 @@ def named_teams(values):
     return list(dict.fromkeys(name.strip().upper() for name in names if name.strip()))
 
 
+def teams_and_fan(params):
+    """The team names and the fan's Preset settings a request's `params` name."""
+    return named_teams(params.get("teams", [])), presets.from_query(params)
+
+
 def root_page(query, now, get):
     """The page at `/` for `query`: team setup, or the list of cards for the teams it names."""
     params = parse_qs(query)
-    names = named_teams(params.get("teams", []))
+    names, fan = teams_and_fan(params)
     showing_setup = "setup" in params or not names
     try:
         if showing_setup:
             return page.setup_screen(sorted(espn_abbreviations(get)), names)
-        return page.list_screen(judge(names, now.date(), get))
+        return page.list_screen(judge(names, now.date(), get, fan))
     except ESPN_UNREACHABLE as error:  # say so plainly; a missing answer must not look like a Verdict
         outage = espn_outage(error)
         if showing_setup:
@@ -108,9 +114,12 @@ def respond(path, now, get):
     `now` sets the Game day and `get` returns ESPN's JSON for a URL (the server passes a Cached fetch).
     """
     url = urlsplit(path)
+    if url.path == "/presets":
+        return 200, JSON_TYPE, json.dumps(presets.definitions()).encode()
     if url.path == "/rows":
+        names, fan = teams_and_fan(parse_qs(url.query))
         try:
-            rows = judge(named_teams(parse_qs(url.query).get("teams", [])), now.date(), get)
+            rows = judge(names, now.date(), get, fan)
         except ESPN_UNREACHABLE as error:
             return 503, JSON_TYPE, json.dumps({"error": espn_outage(error)}).encode()
         return 200, JSON_TYPE, json.dumps({"rows": rows}).encode()

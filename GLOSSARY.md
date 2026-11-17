@@ -25,11 +25,12 @@ _Avoid_: score, rating, recommendation
 The Verdict for a game that is still worth watching.
 
 **Stay away**:
-The Verdict for a game that is out of reach for the Mavericks.
+The Verdict for a game that is out of reach for the fan's team.
 _Avoid_: don't watch, skip, bad game, call it off
 
 **Too early to call**:
-The Verdict for a game that has tipped off but has not yet reached the Judging window.
+The Verdict for a game the fan's Presets cannot judge yet: not enough of the game has been played, or
+the answer waits for the final.
 
 **Reading**:
 One win-probability value that ESPN publishes after a play.
@@ -39,9 +40,15 @@ _Avoid_: data point, sample, tick
 The opponent's win probability above which a game counts as out of reach.
 _Avoid_: threshold, cutoff, odds
 
-**Judging window**:
-The part of a game in which the Stay away line applies, from 6:00 left in the 2nd quarter to the end.
-_Avoid_: cutoff
+**Judge from**:
+The point in a game from which the Presets that use it start reading: 6:00 left in the 2nd quarter
+unless the fan moves it.
+_Avoid_: start point, window start
+
+**Freeze at**:
+The point in a game after which those Presets keep the answer they had: 5:00 left in the 4th quarter
+unless the fan moves it.
+_Avoid_: end point, cutoff
 
 **Preset**:
 One named kind of game a fan likes to watch, such as wins for my team, close games or high-scoring games. A fan picks any number of Presets and chooses whether a game must fit all of them (AND) or any one (OR) to read Watch.
