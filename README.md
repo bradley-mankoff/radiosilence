@@ -31,8 +31,8 @@ The Mac computes the Verdicts and the page contains only them: no score, clock, 
 
 ## Running
 
-A launchd agent (`com.bradley.bad-game-warning.plist`, copied to `~/Library/LaunchAgents/`) starts the server at login on port 8765.
+A launchd agent (`com.bradley.radiosilence.plist`, copied to `~/Library/LaunchAgents/`) starts the server at login on port 8765.
 Open `http://Bradleys-MacBook-Pro-2.local:8765/` on the home network, or the Tailscale Serve address from the phone. In Safari, Share, Add to Home Screen adds it as RadioSilence.
 
-Restart after editing: `launchctl kickstart -k gui/$UID/com.bradley.bad-game-warning`.
+Restart after editing: `launchctl kickstart -k gui/$UID/com.bradley.radiosilence`.
 Tests: `python3 -m unittest`.
