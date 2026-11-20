@@ -155,7 +155,9 @@ bd prime                # Refresh Beads context
 
 This project is indexed by GitNexus as **radiosilence** (1016 symbols, 2726 relationships, 74 execution flows).
 
-> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
+> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze --index-only` (npm 11 npx crash; #1939).
+>
+> Always pass `--index-only` to `analyze`. Without it, GitNexus copies its skills into this repo's `.claude/skills/` and `.agents/skills/` and writes a `CLAUDE.md`; the skills live once for every repo in `~/.agents/skills/` instead, refreshed from the installed GitNexus package (the Boss, 2026-11-20), and this repo has no `CLAUDE.md` on purpose.
 
 ## Always Do
 
@@ -186,11 +188,11 @@ This project is indexed by GitNexus as **radiosilence** (1016 symbols, 2726 rela
 
 | Task | Read this skill file |
 | --- | --- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
+| Understand architecture / "How does X work?" | `~/.agents/skills/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `~/.agents/skills/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `~/.agents/skills/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `~/.agents/skills/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `~/.agents/skills/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `~/.agents/skills/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
